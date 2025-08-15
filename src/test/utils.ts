@@ -1,6 +1,13 @@
 import { vi } from 'vitest';
 import type { AxiosResponse } from 'axios';
-import type { BasecampProject, BasecampTodo, BasecampCardTable, BasecampCard } from '../types/basecamp.js';
+import type {
+    BasecampProject,
+    BasecampTodo,
+    BasecampCardTable,
+    BasecampCard,
+    oAuthTokens,
+    APIResponse
+} from '../types/basecamp.js';
 
 /**
  * Test utilities for Vitest testing
@@ -23,6 +30,7 @@ export const mockBasecampProject = (): BasecampProject => ({
   url: 'https://3.basecamp.com/12345/projects/67890',
   app_url: 'https://3.basecamp.com/12345/projects/67890',
   bookmarked: false,
+  status: 'active',
   dock: [
     {
       id: '111',
@@ -92,7 +100,7 @@ export const mockBasecampCard = (): BasecampCard => ({
   }
 });
 
-export const mockOAuthToken = () => ({
+export const mockOAuthToken = (): oAuthTokens => ({
   access_token: 'test_access_token_123',
   token_type: 'Bearer',
   expires_in: 7200,
@@ -190,7 +198,7 @@ export const mockHttpServer = () => {
       const handler = handlers[`${method.toUpperCase()}:${path}`];
       if (handler) {
         const mockReq = { query, body };
-        const mockRes = {
+        const mockRes: APIResponse = {
           redirect: vi.fn(),
           send: vi.fn(),
           json: vi.fn(),

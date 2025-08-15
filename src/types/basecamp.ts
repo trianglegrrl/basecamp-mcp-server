@@ -17,6 +17,9 @@ export interface OAuthTokens {
 export interface BasecampProject {
   id: string;
   name: string;
+  url?: string;
+  app_url?: string;
+  bookmarked?: boolean;
   description?: string;
   dock: DockItem[];
   created_at: string;

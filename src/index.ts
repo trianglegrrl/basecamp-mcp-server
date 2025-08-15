@@ -853,6 +853,9 @@ class BasecampMCPServer {
   }
 }
 
+// Export the server class for testing
+export { BasecampMCPServer };
+
 // Create server function for CLI usage
 export function createServer(): BasecampMCPServer {
   return new BasecampMCPServer();

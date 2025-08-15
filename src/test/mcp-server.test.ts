@@ -98,7 +98,6 @@ describe('MCP Server Core Functionality', () => {
 
   describe('Tools Registration', () => {
     it('should have tools available through server', async () => {
-      // Since we're testing the real server, we can't directly access tools
       // This test validates the server exists and can be created
       expect(server).toBeDefined();
     });
