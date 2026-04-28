@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
-import { promises as fs } from 'fs';
+import { promises as fs, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
 import { config } from 'dotenv';
+import { findProjectRoot, projectPath } from '../lib/paths.js';
 
-// Load environment variables
-config();
+// Load .env from the project root regardless of cwd.
+config({ path: projectPath('.env') });
 
 function getCursorConfigPath(): string {
   switch (platform()) {
@@ -17,17 +18,40 @@ function getCursorConfigPath(): string {
   }
 }
 
-function getBinaryPath(): string {
-  // In a real npm package, this would be in node_modules/.bin/
-  // For development, point to the built binary
-  return 'basecamp-mcp';
+interface ServerConfig {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string>;
+}
+
+function buildServerConfig(): ServerConfig {
+  const projectRoot = findProjectRoot();
+  const entrypoint = join(projectRoot, 'dist', 'index.js');
+
+  if (!existsSync(entrypoint)) {
+    throw new Error(
+      `dist/index.js not found at ${entrypoint}. Run 'npm run build' before generating the config.`
+    );
+  }
+
+  const env: Record<string, string> = {};
+  if (process.env.BASECAMP_ACCOUNT_ID) {
+    env.BASECAMP_ACCOUNT_ID = process.env.BASECAMP_ACCOUNT_ID;
+  }
+
+  return {
+    command: process.execPath,
+    args: [entrypoint],
+    cwd: projectRoot,
+    env,
+  };
 }
 
 async function generateConfig(): Promise<boolean> {
   console.log('🚀 Generating Cursor IDE Configuration for Basecamp MCP');
   console.log('='.repeat(60));
 
-  const binaryPath = getBinaryPath();
   const accountId = process.env.BASECAMP_ACCOUNT_ID;
 
   if (!accountId) {
@@ -35,16 +59,12 @@ async function generateConfig(): Promise<boolean> {
     console.error('   Add BASECAMP_ACCOUNT_ID to your .env file for proper configuration');
   }
 
+  const serverConfig = buildServerConfig();
+
   // Create configuration
   const config = {
     mcpServers: {
-      basecamp: {
-        command: binaryPath,
-        args: [],
-        env: {
-          BASECAMP_ACCOUNT_ID: accountId || 'YOUR_ACCOUNT_ID_HERE',
-        },
-      },
+      basecamp: serverConfig,
     },
   };
 
@@ -81,7 +101,9 @@ async function generateConfig(): Promise<boolean> {
     console.log(`📍 Config file: ${configPath}`);
     console.log('\n📋 Configuration details:');
     console.log('   • Server name: basecamp');
-    console.log(`   • Binary: ${binaryPath}`);
+    console.log(`   • Command:    ${serverConfig.command}`);
+    console.log(`   • Args:       ${serverConfig.args.join(' ')}`);
+    console.log(`   • Cwd:        ${serverConfig.cwd}`);
     console.log(`   • Account ID: ${accountId || 'YOUR_ACCOUNT_ID_HERE'}`);
     console.log('\n🔄 Next steps:');
     console.log('   1. Restart Cursor IDE completely (quit and reopen)');
