@@ -70,6 +70,20 @@ The script will:
 - Prompt you for your Basecamp OAuth credentials and write `.env`
 - Launch the OAuth flow in your browser to finish authentication
 
+#### Step 4 — Wire it into Claude Desktop / Cursor
+
+From inside the cloned `basecamp-mcp-server` directory:
+
+```bash
+npm run install:claude   # for Claude Desktop
+# or
+npm run install:cursor   # for Cursor IDE
+```
+
+This is a single idempotent command that runs `npm install` → `npm run build` → `npm run auth` (skipped if `oauth_tokens.json` already exists) → writes the assistant's MCP config with absolute paths. Re-run it any time you pull new changes, switch node versions, or move the project — it self-heals.
+
+After it finishes, **fully quit the app (Cmd+Q on macOS — closing the window is not enough)** and reopen it. The basecamp tools should appear in the tool list.
+
 ### NPX Installation
 
 ```bash

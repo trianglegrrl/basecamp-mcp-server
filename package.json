@@ -21,6 +21,8 @@
     "smoke": "node scripts/smoke.mjs",
     "config:cursor": "tsx src/scripts/generate-cursor-config.ts",
     "config:claude": "tsx src/scripts/generate-claude-config.ts",
+    "install:claude": "node scripts/install-target.mjs claude",
+    "install:cursor": "node scripts/install-target.mjs cursor",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
