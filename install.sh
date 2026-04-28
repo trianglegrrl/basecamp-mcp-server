@@ -47,7 +47,37 @@ prompt() {
 }
 
 _restore_tty() { ( stty echo < /dev/tty ) >/dev/null 2>&1 || true; }
-trap _restore_tty EXIT INT TERM
+_sudo_keeper_pid=""
+_stop_sudo_keepalive() {
+  if [ -n "$_sudo_keeper_pid" ]; then
+    kill "$_sudo_keeper_pid" 2>/dev/null || true
+    _sudo_keeper_pid=""
+  fi
+}
+_cleanup() { _restore_tty; _stop_sudo_keepalive; }
+trap _cleanup EXIT INT TERM
+
+prime_sudo() {
+  # Cache sudo credentials. Prompts the user via /dev/tty if needed.
+  if ! command -v sudo >/dev/null 2>&1; then
+    fail "sudo is not installed but is required to install system packages."
+  fi
+  if sudo -n true 2>/dev/null; then
+    return
+  fi
+  printf "\n%sAdministrator access is required to install system packages.%s\n" "$BOLD" "$NC" > /dev/tty
+  printf "You'll be prompted for your password (it won't be displayed).\n" > /dev/tty
+  if ! sudo -v; then
+    fail "sudo authentication failed or was canceled."
+  fi
+}
+
+start_sudo_keepalive() {
+  # Refresh sudo timestamp every 60s in the background until killed.
+  # Exits the loop if sudo creds expire without a tty (e.g., user revoked them).
+  ( while true; do sudo -n true 2>/dev/null || exit 0; sleep 60; done ) &
+  _sudo_keeper_pid=$!
+}
 
 prompt_secret() {
   # prompt_secret VAR_NAME "Question text" [allow_keep_existing_value]
@@ -114,10 +144,12 @@ ensure_homebrew() {
     ok "Homebrew already installed"
     return
   fi
-  info "Installing Homebrew (you may be prompted for your password)..."
+  info "Installing Homebrew..."
+  prime_sudo
+  start_sudo_keepalive
   NONINTERACTIVE=1 /bin/bash -c \
-    "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-    < /dev/tty
+    "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  _stop_sudo_keepalive
   if [ -x /opt/homebrew/bin/brew ]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
   elif [ -x /usr/local/bin/brew ]; then
@@ -135,16 +167,19 @@ ensure_git() {
   info "Installing git..."
   if [ "$OS" = "macos" ]; then
     brew install git
-  elif command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update && sudo apt-get install -y git
-  elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y git
-  elif command -v yum >/dev/null 2>&1; then
-    sudo yum install -y git
-  elif command -v pacman >/dev/null 2>&1; then
-    sudo pacman -Sy --noconfirm git
   else
-    fail "No supported package manager found. Please install git manually and re-run."
+    prime_sudo
+    if command -v apt-get >/dev/null 2>&1; then
+      sudo apt-get update && sudo apt-get install -y git
+    elif command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y git
+    elif command -v yum >/dev/null 2>&1; then
+      sudo yum install -y git
+    elif command -v pacman >/dev/null 2>&1; then
+      sudo pacman -Sy --noconfirm git
+    else
+      fail "No supported package manager found. Please install git manually and re-run."
+    fi
   fi
   ok "git installed"
 }
@@ -163,16 +198,22 @@ ensure_node() {
   fi
   if [ "$OS" = "macos" ]; then
     brew install node
-  elif command -v apt-get >/dev/null 2>&1; then
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-  elif command -v dnf >/dev/null 2>&1; then
-    curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
-    sudo dnf install -y nodejs
-  elif command -v pacman >/dev/null 2>&1; then
-    sudo pacman -Sy --noconfirm nodejs npm
   else
-    fail "No supported package manager found. Please install Node.js 18+ manually."
+    prime_sudo
+    start_sudo_keepalive
+    if command -v apt-get >/dev/null 2>&1; then
+      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+      sudo apt-get install -y nodejs
+    elif command -v dnf >/dev/null 2>&1; then
+      curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+      sudo dnf install -y nodejs
+    elif command -v pacman >/dev/null 2>&1; then
+      sudo pacman -Sy --noconfirm nodejs npm
+    else
+      _stop_sudo_keepalive
+      fail "No supported package manager found. Please install Node.js 18+ manually."
+    fi
+    _stop_sudo_keepalive
   fi
   command -v node >/dev/null 2>&1 || fail "Node.js install did not put node on PATH."
   ok "Node.js installed ($(node -v))"
