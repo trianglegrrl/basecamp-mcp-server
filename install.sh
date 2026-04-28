@@ -47,37 +47,7 @@ prompt() {
 }
 
 _restore_tty() { ( stty echo < /dev/tty ) >/dev/null 2>&1 || true; }
-_sudo_keeper_pid=""
-_stop_sudo_keepalive() {
-  if [ -n "$_sudo_keeper_pid" ]; then
-    kill "$_sudo_keeper_pid" 2>/dev/null || true
-    _sudo_keeper_pid=""
-  fi
-}
-_cleanup() { _restore_tty; _stop_sudo_keepalive; }
-trap _cleanup EXIT INT TERM
-
-prime_sudo() {
-  # Cache sudo credentials. Prompts the user via /dev/tty if needed.
-  if ! command -v sudo >/dev/null 2>&1; then
-    fail "sudo is not installed but is required to install system packages."
-  fi
-  if sudo -n true 2>/dev/null; then
-    return
-  fi
-  printf "\n%sAdministrator access is required to install system packages.%s\n" "$BOLD" "$NC" > /dev/tty
-  printf "You'll be prompted for your password (it won't be displayed).\n" > /dev/tty
-  if ! sudo -v; then
-    fail "sudo authentication failed or was canceled."
-  fi
-}
-
-start_sudo_keepalive() {
-  # Refresh sudo timestamp every 60s in the background until killed.
-  # Exits the loop if sudo creds expire without a tty (e.g., user revoked them).
-  ( while true; do sudo -n true 2>/dev/null || exit 0; sleep 60; done ) &
-  _sudo_keeper_pid=$!
-}
+trap _restore_tty EXIT INT TERM
 
 prompt_secret() {
   # prompt_secret VAR_NAME "Question text" [allow_keep_existing_value]
@@ -136,7 +106,7 @@ detect_os() {
   ok "Detected OS: $OS"
 }
 
-ensure_homebrew() {
+ensure_homebrew_present() {
   if [ "$OS" != "macos" ]; then
     return
   fi
@@ -144,18 +114,11 @@ ensure_homebrew() {
     ok "Homebrew already installed"
     return
   fi
-  info "Installing Homebrew..."
-  printf "  Homebrew will ask you to press Enter to confirm, then for your password.\n" > /dev/tty
-  /bin/bash -c \
-    "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-    < /dev/tty
-  if [ -x /opt/homebrew/bin/brew ]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-  elif [ -x /usr/local/bin/brew ]; then
-    eval "$(/usr/local/bin/brew shellenv)"
-  fi
-  command -v brew >/dev/null 2>&1 || fail "Homebrew install did not put brew on PATH."
-  ok "Homebrew installed"
+  fail "Homebrew is not installed. Install it first by running this in a new terminal:
+
+  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"
+
+Then re-run this installer."
 }
 
 ensure_git() {
@@ -163,24 +126,17 @@ ensure_git() {
     ok "git already installed ($(git --version))"
     return
   fi
-  info "Installing git..."
   if [ "$OS" = "macos" ]; then
+    info "Installing git via Homebrew..."
     brew install git
+    ok "git installed"
   else
-    prime_sudo
-    if command -v apt-get >/dev/null 2>&1; then
-      sudo apt-get update && sudo apt-get install -y git
-    elif command -v dnf >/dev/null 2>&1; then
-      sudo dnf install -y git
-    elif command -v yum >/dev/null 2>&1; then
-      sudo yum install -y git
-    elif command -v pacman >/dev/null 2>&1; then
-      sudo pacman -Sy --noconfirm git
-    else
-      fail "No supported package manager found. Please install git manually and re-run."
-    fi
+    fail "git is not installed. Install it first, then re-run this installer:
+
+  Debian/Ubuntu:  sudo apt-get update && sudo apt-get install -y git
+  Fedora:         sudo dnf install -y git
+  Arch:           sudo pacman -Sy --noconfirm git"
   fi
-  ok "git installed"
 }
 
 ensure_node() {
@@ -191,31 +147,30 @@ ensure_node() {
       ok "Node.js already installed ($(node -v))"
       return
     fi
-    warn "Node.js $(node -v) is too old; need 18+. Installing newer version..."
-  else
-    info "Installing Node.js 20..."
+    warn "Node.js $(node -v) is too old; need 18+."
   fi
   if [ "$OS" = "macos" ]; then
-    brew install node
-  else
-    prime_sudo
-    start_sudo_keepalive
-    if command -v apt-get >/dev/null 2>&1; then
-      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-      sudo apt-get install -y nodejs
-    elif command -v dnf >/dev/null 2>&1; then
-      curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
-      sudo dnf install -y nodejs
-    elif command -v pacman >/dev/null 2>&1; then
-      sudo pacman -Sy --noconfirm nodejs npm
+    info "Installing Node.js via Homebrew..."
+    if command -v node >/dev/null 2>&1; then
+      brew upgrade node || brew install node
     else
-      _stop_sudo_keepalive
-      fail "No supported package manager found. Please install Node.js 18+ manually."
+      brew install node
     fi
-    _stop_sudo_keepalive
+    ok "Node.js installed ($(node -v))"
+  else
+    fail "Node.js 18+ is not installed. Install it first, then re-run this installer:
+
+  Debian/Ubuntu:
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+
+  Fedora:
+    curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+    sudo dnf install -y nodejs
+
+  Arch:
+    sudo pacman -Sy --noconfirm nodejs npm"
   fi
-  command -v node >/dev/null 2>&1 || fail "Node.js install did not put node on PATH."
-  ok "Node.js installed ($(node -v))"
 }
 
 get_repo() {
@@ -345,7 +300,7 @@ main() {
   printf "================================================\n"
   require_tty
   detect_os
-  ensure_homebrew
+  ensure_homebrew_present
   ensure_git
   ensure_node
   get_repo
