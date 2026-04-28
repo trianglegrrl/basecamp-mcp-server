@@ -8,7 +8,7 @@ const ENV_TEMPLATE = `# Basecamp OAuth Configuration
 # Create your OAuth app at: https://launchpad.37signals.com/integrations
 BASECAMP_CLIENT_ID=your_client_id_here
 BASECAMP_CLIENT_SECRET=your_client_secret_here
-BASECAMP_REDIRECT_URI=http://localhost:8000/auth/callback
+BASECAMP_REDIRECT_URI=http://lvh.me:8000/auth/callback
 
 # Basecamp Account Information
 # Find this in your Basecamp 3 URL: https://3.basecamp.com/4389629/projects (the number is your account ID)
