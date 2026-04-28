@@ -10,21 +10,65 @@ A modern **TypeScript MCP server** for Basecamp 3, providing seamless integratio
 
 ### One-line installer (macOS / Linux)
 
-For users who just want it to work, run this in a terminal:
+#### Step 1 — Install the prerequisites
+
+The installer needs a few system tools to be present already. It does **not** install them itself, because doing so requires sudo. Install whatever you're missing, then move on to step 2.
+
+**macOS** — install Homebrew if you don't have it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jhliberty/basecamp-mcp-server/master/install.sh | bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+The installer will use `brew` to install `git` and `node` for you, so that's all you need on macOS.
+
+**Linux (Debian/Ubuntu)** — install git and Node.js 18+:
+
+```bash
+sudo apt-get update && sudo apt-get install -y git
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+**Linux (Fedora)**:
+
+```bash
+sudo dnf install -y git
+curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+sudo dnf install -y nodejs
+```
+
+**Linux (Arch)**:
+
+```bash
+sudo pacman -Sy --noconfirm git nodejs npm
+```
+
+#### Step 2 — Create the Basecamp OAuth app
+
+Go to <https://launchpad.37signals.com/integrations>, create an application, and set the redirect URI to:
+
+```
+http://lvh.me:8000/auth/callback
+```
+
+(This must match exactly. `lvh.me` is a public DNS name that resolves to `127.0.0.1`; we use it because the 37signals form rejects bare `localhost`.)
+
+Keep the Client ID and Client Secret on hand — the installer will ask for them.
+
+#### Step 3 — Run the installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/trianglegrrl/basecamp-mcp-server/master/install.sh | bash
 ```
 
 The script will:
-- Install Homebrew (macOS only) if missing
-- Install `git` and `node` (18+) if missing
+- Verify prerequisites are present (errors out with the exact install command if not)
+- On macOS, run `brew install git node` if either is missing
 - Clone the repo into `./basecamp-mcp-server`
-- Install dependencies and build
+- Install npm dependencies and build
 - Prompt you for your Basecamp OAuth credentials and write `.env`
 - Launch the OAuth flow in your browser to finish authentication
-
-You'll need to create an OAuth app first at <https://launchpad.37signals.com/integrations> with redirect URI **`http://lvh.me:8000/auth/callback`**.
 
 ### NPX Installation
 
