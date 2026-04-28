@@ -145,11 +145,10 @@ ensure_homebrew() {
     return
   fi
   info "Installing Homebrew..."
-  prime_sudo
-  start_sudo_keepalive
-  NONINTERACTIVE=1 /bin/bash -c \
-    "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  _stop_sudo_keepalive
+  printf "  Homebrew will ask you to press Enter to confirm, then for your password.\n" > /dev/tty
+  /bin/bash -c \
+    "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+    < /dev/tty
   if [ -x /opt/homebrew/bin/brew ]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
   elif [ -x /usr/local/bin/brew ]; then
