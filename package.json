@@ -18,6 +18,7 @@
     "test:coverage-ui": "vitest --ui --coverage",
     "setup": "tsx src/scripts/setup.ts",
     "auth": "tsx src/scripts/oauth-app.ts",
+    "smoke": "node scripts/smoke.mjs",
     "config:cursor": "tsx src/scripts/generate-cursor-config.ts",
     "config:claude": "tsx src/scripts/generate-claude-config.ts",
     "prepublishOnly": "npm run build"

@@ -4,9 +4,10 @@ import express from 'express';
 import axios from 'axios';
 import { config } from 'dotenv';
 import { tokenStorage } from '../lib/token-storage.js';
+import { projectPath } from '../lib/paths.js';
 
-// Load environment variables
-config();
+// Load .env from the project root regardless of cwd.
+config({ path: projectPath('.env') });
 
 interface OAuthResponse {
   access_token: string;

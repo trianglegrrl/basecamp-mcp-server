@@ -1,8 +1,22 @@
 import { promises as fs } from 'fs';
-import { join } from 'path';
 import type { OAuthTokens } from '../types/basecamp.js';
+import { projectPath } from './paths.js';
 
-const TOKEN_FILE = join(process.cwd(), 'oauth_tokens.json');
+function getTokenFile(): string {
+  return process.env.BASECAMP_TOKEN_FILE || projectPath('oauth_tokens.json');
+}
+
+function tokenFromEnv(): OAuthTokens | null {
+  const accessToken = process.env.BASECAMP_ACCESS_TOKEN;
+  if (!accessToken) return null;
+  return {
+    accessToken,
+    refreshToken: process.env.BASECAMP_REFRESH_TOKEN || undefined,
+    accountId: process.env.BASECAMP_ACCOUNT_ID || '',
+    expiresAt: process.env.BASECAMP_TOKEN_EXPIRES_AT || undefined,
+    updatedAt: new Date().toISOString(),
+  };
+}
 
 interface TokenStorage {
   basecamp?: OAuthTokens;
@@ -25,7 +39,7 @@ export class TokenStorageManager {
     }
 
     try {
-      const data = await fs.readFile(TOKEN_FILE, 'utf-8');
+      const data = await fs.readFile(getTokenFile(), 'utf-8');
       this.tokenCache = JSON.parse(data);
       return this.tokenCache || {};
     } catch (error: any) {
@@ -39,9 +53,9 @@ export class TokenStorageManager {
 
   private async writeTokens(tokens: TokenStorage): Promise<void> {
     try {
-      await fs.writeFile(TOKEN_FILE, JSON.stringify(tokens, null, 2));
-      // Set secure permissions (owner read/write only)
-      await fs.chmod(TOKEN_FILE, 0o600);
+      const path = getTokenFile();
+      await fs.writeFile(path, JSON.stringify(tokens, null, 2));
+      await fs.chmod(path, 0o600);
       this.tokenCache = tokens;
     } catch (error: any) {
       console.error(`Error writing tokens: ${error.message}`);
@@ -78,15 +92,22 @@ export class TokenStorageManager {
   }
 
   async getToken(): Promise<OAuthTokens | null> {
+    const fromEnv = tokenFromEnv();
+    if (fromEnv) return fromEnv;
     const tokens = await this.readTokens();
     return tokens.basecamp || null;
   }
 
   async isTokenExpired(): Promise<boolean> {
     const tokenData = await this.getToken();
-    
-    if (!tokenData || !tokenData.expiresAt) {
+
+    if (!tokenData) {
       return true;
+    }
+    // Missing expiresAt: assume valid and let the API surface 401 if not.
+    // This is required for env-var-supplied tokens which may not include an expiry.
+    if (!tokenData.expiresAt) {
+      return false;
     }
 
     try {
@@ -101,7 +122,7 @@ export class TokenStorageManager {
 
   async clearTokens(): Promise<boolean> {
     try {
-      await fs.unlink(TOKEN_FILE);
+      await fs.unlink(getTokenFile());
       this.tokenCache = null;
       return true;
     } catch (error: any) {

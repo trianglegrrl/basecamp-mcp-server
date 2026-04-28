@@ -11,10 +11,13 @@ import {
 import { config } from 'dotenv';
 import { BasecampClient } from './lib/basecamp-client.js';
 import { tokenStorage } from './lib/token-storage.js';
+import { projectPath } from './lib/paths.js';
 import type { MCPToolResult } from './types/basecamp.js';
 
-// Load environment variables
-config();
+// Load .env from the project root, not the launching process's cwd.
+// This matters because Claude Desktop / Cursor spawn the server from
+// their own working directory, which is not where .env lives.
+config({ path: projectPath('.env') });
 
 class BasecampMCPServer {
   private server: Server;

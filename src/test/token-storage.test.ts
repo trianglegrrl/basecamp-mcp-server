@@ -3,15 +3,20 @@ import { promises as fs } from 'fs';
 import { TokenStorageManager, tokenStorage } from '../lib/token-storage.js';
 import type { OAuthTokens } from '../types/basecamp.js';
 
-// Mock fs module
-vi.mock('fs', () => ({
-  promises: {
-    readFile: vi.fn(),
-    writeFile: vi.fn(),
-    chmod: vi.fn(),
-    unlink: vi.fn(),
-  }
-}));
+// Mock only fs.promises so the path-resolution helpers in src/lib/paths.ts
+// (which use the synchronous existsSync) keep working against the real fs.
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    promises: {
+      readFile: vi.fn(),
+      writeFile: vi.fn(),
+      chmod: vi.fn(),
+      unlink: vi.fn(),
+    },
+  };
+});
 
 const mockFs = vi.mocked(fs);
 
@@ -275,13 +280,13 @@ describe('TokenStorageManager', () => {
       expect(isExpired).toBe(true);
     });
 
-    it('should return true when token has no expiration', async () => {
+    it('should treat token without expiration as valid (let API surface 401 if it is not)', async () => {
       const tokenWithoutExpiry = { ...validToken, expiresAt: undefined };
       mockFs.readFile.mockResolvedValue(JSON.stringify({ basecamp: tokenWithoutExpiry }));
 
       const isExpired = await manager.isTokenExpired();
 
-      expect(isExpired).toBe(true);
+      expect(isExpired).toBe(false);
     });
 
     it('should account for 5-minute buffer', async () => {
@@ -524,6 +529,78 @@ describe('TokenStorageManager', () => {
 
       // File should not be read again due to caching
       expect(mockFs.readFile).toHaveBeenCalledTimes(0);
+    });
+  });
+
+  describe('Env-var token fallback', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('should return token built from BASECAMP_ACCESS_TOKEN env var', async () => {
+      vi.stubEnv('BASECAMP_ACCESS_TOKEN', 'env-access-token');
+      vi.stubEnv('BASECAMP_REFRESH_TOKEN', 'env-refresh-token');
+      vi.stubEnv('BASECAMP_ACCOUNT_ID', '99999');
+
+      const result = await manager.getToken();
+
+      expect(result?.accessToken).toBe('env-access-token');
+      expect(result?.refreshToken).toBe('env-refresh-token');
+      expect(result?.accountId).toBe('99999');
+      expect(mockFs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('should prefer env-var token over file contents when both exist', async () => {
+      vi.stubEnv('BASECAMP_ACCESS_TOKEN', 'env-wins');
+      mockFs.readFile.mockResolvedValue(JSON.stringify({ basecamp: validToken }));
+
+      const result = await manager.getToken();
+
+      expect(result?.accessToken).toBe('env-wins');
+    });
+
+    it('should fall through to file when BASECAMP_ACCESS_TOKEN is unset', async () => {
+      vi.stubEnv('BASECAMP_ACCESS_TOKEN', '');
+      mockFs.readFile.mockResolvedValue(JSON.stringify({ basecamp: validToken }));
+
+      const result = await manager.getToken();
+
+      expect(result).toEqual(validToken);
+    });
+
+    it('should treat env-var token without expiry as not expired', async () => {
+      vi.stubEnv('BASECAMP_ACCESS_TOKEN', 'env-access-token');
+      // No BASECAMP_TOKEN_EXPIRES_AT set
+
+      const isExpired = await manager.isTokenExpired();
+
+      expect(isExpired).toBe(false);
+    });
+  });
+
+  describe('Token file path resolution', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('should resolve token file path relative to project root, not cwd', async () => {
+      mockFs.readFile.mockResolvedValue('{}');
+
+      await manager.getToken();
+
+      const calledPath = mockFs.readFile.mock.calls[0][0] as string;
+      expect(calledPath).toMatch(/oauth_tokens\.json$/);
+      // Path must be absolute and not relative to whatever cwd happens to be.
+      expect(calledPath.startsWith('/') || /^[A-Z]:/.test(calledPath)).toBe(true);
+    });
+
+    it('should honor BASECAMP_TOKEN_FILE env var override', async () => {
+      vi.stubEnv('BASECAMP_TOKEN_FILE', '/custom/path/tokens.json');
+      mockFs.readFile.mockResolvedValue('{}');
+
+      await manager.getToken();
+
+      expect(mockFs.readFile).toHaveBeenCalledWith('/custom/path/tokens.json', 'utf-8');
     });
   });
 });
