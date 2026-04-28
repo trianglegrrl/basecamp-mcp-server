@@ -8,7 +8,25 @@ A modern **TypeScript MCP server** for Basecamp 3, providing seamless integratio
 
 ## Quick Setup
 
-### NPX Installation (Recommended)
+### One-line installer (macOS / Linux)
+
+For users who just want it to work, run this in a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jhliberty/basecamp-mcp-server/master/install.sh | bash
+```
+
+The script will:
+- Install Homebrew (macOS only) if missing
+- Install `git` and `node` (18+) if missing
+- Clone the repo into `./basecamp-mcp-server`
+- Install dependencies and build
+- Prompt you for your Basecamp OAuth credentials and write `.env`
+- Launch the OAuth flow in your browser to finish authentication
+
+You'll need to create an OAuth app first at <https://launchpad.37signals.com/integrations> with redirect URI **`http://lvh.me:8000/auth/callback`**.
+
+### NPX Installation
 
 ```bash
 # Install and set up in one command

@@ -33,7 +33,7 @@ class BasecampOAuthServer {
     
     this.clientId = process.env.BASECAMP_CLIENT_ID || '';
     this.clientSecret = process.env.BASECAMP_CLIENT_SECRET || '';
-    this.redirectUri = process.env.BASECAMP_REDIRECT_URI || 'http://localhost:8000/auth/callback';
+    this.redirectUri = process.env.BASECAMP_REDIRECT_URI || 'http://lvh.me:8000/auth/callback';
 
     if (!this.clientId || !this.clientSecret) {
       console.error('❌ Missing OAuth credentials in .env file');
@@ -206,13 +206,13 @@ class BasecampOAuthServer {
     this.app.listen(this.port, () => {
       console.log('🚀 Basecamp MCP OAuth Server Started');
       console.log('='.repeat(40));
-      console.log(`🌐 Open your browser to: http://localhost:${this.port}`);
+      console.log(`🌐 Open your browser to: http://lvh.me:${this.port}`);
       console.log('🔗 Complete the OAuth flow to get your access token');
       console.log('');
       console.log('💡 Make sure you have:');
       console.log('   • Created an OAuth app at https://launchpad.37signals.com/integrations');
       console.log('   • Set BASECAMP_CLIENT_ID and BASECAMP_CLIENT_SECRET in .env');
-      console.log('   • Set redirect URI to http://localhost:8000/auth/callback');
+      console.log('   • Set redirect URI to http://lvh.me:8000/auth/callback');
       console.log('');
       console.log('🛑 Press Ctrl+C to stop the server');
     });
