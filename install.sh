@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-REPO_URL="${BASECAMP_MCP_REPO_URL:-https://github.com/jhliberty/basecamp-mcp-server.git}"
+REPO_URL="${BASECAMP_MCP_REPO_URL:-https://github.com/trianglegrrl/basecamp-mcp-server.git}"
 REPO_DIR="${BASECAMP_MCP_DIR:-basecamp-mcp-server}"
 REDIRECT_URI="http://lvh.me:8000/auth/callback"
 
