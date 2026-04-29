@@ -141,6 +141,8 @@ If the smoke works and unit tests pass, the tool is shippable. **Restart Claude 
 | **Date scopes that use `new Date()` directly** | Tests pass today, fail tomorrow | Accept `today?: string` (ISO `YYYY-MM-DD`) on filtering methods. Default to `new Date().toISOString().slice(0, 10)` only at the public boundary. |
 | **CWD-dependent paths** | Server works from terminal, fails from Claude Desktop | Already fixed (see `src/lib/paths.ts` / `src/index.ts:20`). Don't reintroduce `process.cwd()` for `.env` or `oauth_tokens.json`. |
 | **Tool added but invisible in client** | Code shipped, restart didn't help | Claude Desktop / Cursor cache tool lists at connect. Fully quit (Cmd+Q on macOS) and reopen — closing the window is not enough. |
+| **Missing `User-Agent` header** | `400 Bad Request` from BC3 with no useful body, only when reproducing with raw `curl` | BC3 rejects requests without a meaningful UA (`MyApp (email@example.com)` form). The `BasecampClient` sets it from `USER_AGENT` env var; if you skip the client and call `fetch`/`curl` directly during a probe, set it manually. |
+| **Hitting rate limits at 50 req / 10 sec / IP** | `429 Too Many Requests` with `Retry-After` header, usually when paginating through hundreds of recordings | The client does not currently retry on 429. If a new tool walks lots of pages, add backoff that respects `Retry-After`. For one-off probes, add `await new Promise(r => setTimeout(r, 250))` between pages. |
 
 ## Quick reference: where each layer lives
 
