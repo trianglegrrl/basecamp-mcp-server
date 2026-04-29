@@ -67,6 +67,29 @@ If the user says "this week" without specifying, ask: "do you want everything fr
 2. `get_project` for the dock (lists `todoset`, `card_table`, etc.)
 3. From there choose: `get_todolists` for to-do lists, or `get_card_table` → `get_columns` → `get_cards` for kanban
 
+### "Show all overdue tasks across the whole project" (all-member scan)
+
+This is a two-pass hybrid. `get_assignments_for_person` is the primary tool, but its results **must be filtered client-side** and **large responses require special parsing** (see Pitfalls).
+
+**Pass 1 — per-person assignment scan:**
+
+1. `get_project_people` with `project_id` to get all members
+2. For each person, call `get_assignments_for_person` with `scope=overdue` and `bucket=[project_id]`
+3. For large result sets the MCP stores the response in a file. Parse it correctly (see Pitfalls — "Stored result files have unexpected format")
+4. Filter each result set to `completed == false` — the scope filter is **date-only**; it does not exclude completed items
+5. Deduplicate by todo `id` (multi-assignee tasks appear in multiple people's results)
+
+**Pass 2 — subgroup verification:**
+
+`get_assignments_for_person` walks the recordings API and surfaces most todos, but tasks in **todolist subgroups** can be missed or truncated for people with large assignment histories. After Pass 1:
+
+6. Call `get_todolists` on the project to discover top-level lists
+7. For any list that has a `groups_url`, the MCP has no dedicated `get_groups` tool — instead, collect any subgroup IDs you encountered as `parent.id` values in Pass 1 results
+8. Call `get_todos` on each known subgroup ID; filter results to `completed == false` AND `due_on < today`
+9. Merge with Pass 1 results, deduplicating by todo `id`
+
+**Note on `get_todos` and parent lists:** `get_todos` called on a **parent todolist** returns empty when all its items live in subgroups. Only call `get_todos` on subgroup IDs (i.e. IDs that appeared as `parent.id` in assignment results), not on the top-level list ID.
+
 ## Pitfalls (real ones, not hypothetical)
 
 | Pitfall | Symptom | What to do |
@@ -78,6 +101,10 @@ If the user says "this week" without specifying, ask: "do you want everything fr
 | **`due_on` is null** | A todo has no due date and gets dropped from scope filters | Scope filters only match items with a date. If the user asks "all of Jill's open tasks", omit `scope` entirely. |
 | **Card steps look like todos** | A "task" in the response has a `parent` that's a card, not a todolist | Some items are kanban card steps surfaced as assignments. They share completion endpoints with todos. Render them with the parent card title for context. |
 | **"L2" is ambiguous** | User says "L2 tasks", you guess wrong project | Ask for the URL or call `get_projects` and confirm. The numeric id is in the URL: `https://3.basecamp.com/4418220/projects/45799317` → `45799317`. |
+| **`scope=overdue` includes completed items** | All-project scan returns many items, but filtering by `completed == false` in your script yields 0 when there are clearly open tasks | The scope filter is date-only — it does NOT exclude completed todos. Always filter `completed == false` explicitly after receiving results. |
+| **Stored result files have unexpected format** | Bash/Python script calls `data.get('assignments')` on a stored file and gets nothing, even though the file is hundreds of KB | When the MCP stores a large result to disk, it wraps the payload: the file is a JSON array `[{"type": "text", "text": "<JSON string>"}]`. Parse with: `outer = json.load(f); data = json.loads(outer[0]['text']); assignments = data['assignments']`. Never call `.get('assignments')` directly on the outer structure. |
+| **Subgroup todos missed in all-project scans** | A task clearly visible in the Basecamp UI is absent from `get_assignments_for_person` results | Basecamp todolist **subgroups** are nested Todolist objects. The recordings API surfaces most of them, but people with large assignment histories may have results truncated. Always do Pass 2 (subgroup verification): collect `parent.id` values seen in Pass 1, call `get_todos` on each, and merge. |
+| **`get_todos` on a parent list returns empty** | Calling `get_todos` with a top-level todolist ID returns `count: 0` even though the list shows many items in the UI | The list's todos all live in subgroups. `get_todos` on the parent returns nothing. Use the subgroup IDs (found as `parent.id` in assignment results) instead. |
 
 ## Output formatting
 
@@ -101,3 +128,6 @@ When the user is just reading the answer in chat, prose is fine.
 - Don't scope a date filter unless the user asked for one. "What does Jill have" ≠ "What's overdue for Jill".
 - Don't auto-post to Slack. Confirm channel + content first.
 - Don't claim the answer is exhaustive across people you can't see — the token only sees what its user can see.
+- Don't trust `scope=overdue` to exclude completed tasks — it doesn't. Always filter `completed == false` in your own code.
+- Don't parse stored MCP result files as if they're raw Basecamp JSON. Unwrap the `[{"type":"text","text":"..."}]` envelope first.
+- Don't call `get_todos` on a top-level todolist ID and assume empty means no tasks — the todos may all be in subgroups.
