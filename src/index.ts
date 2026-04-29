@@ -175,6 +175,68 @@ class BasecampMCPServer {
               required: ['project_id', 'todolist_id'],
             },
           },
+          {
+            name: 'get_my_profile',
+            description: 'Get the current authenticated user\'s profile (id, name, email). Useful before filtering tasks "assigned to me".',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'get_my_assignments',
+            description: 'Get the current user\'s active assignments (todos and card steps assigned to me) across all projects, grouped into priorities and non_priorities. Includes due_on and bucket (project) info.',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'get_my_due_assignments',
+            description: 'Get the current user\'s assignments filtered by due-date scope. Defaults to "overdue" when scope omitted.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                scope: {
+                  type: 'string',
+                  enum: ['overdue', 'due_today', 'due_tomorrow', 'due_later_this_week', 'due_next_week', 'due_later'],
+                  description: 'Due-date scope filter. Omit for server default (overdue).',
+                },
+              },
+            },
+          },
+          {
+            name: 'get_my_completed_assignments',
+            description: 'Get the current user\'s completed assignments (excludes archived/trashed).',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'get_people',
+            description: 'List all people visible to the current user across the account.',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'get_project_people',
+            description: 'List active people on a given project.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                project_id: { type: 'string', description: 'The project ID' },
+              },
+              required: ['project_id'],
+            },
+          },
+          {
+            name: 'get_assignments_for_person',
+            description: 'Find todos assigned to ANY person (not just current user). Use to answer questions like "show me Jill\'s tasks due this week". Provide person_id OR person_name (case-insensitive substring match against /people.json). Optional scope filter (overdue, due_today, due_tomorrow, due_later_this_week, due_next_week, due_later) and bucket filter (project ID, comma-separated). Walks /projects/recordings.json?type=Todo and filters client-side; assignee filtering is not server-side in BC3.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                person_id: { type: ['string', 'number'], description: 'Basecamp person id (preferred when known)' },
+                person_name: { type: 'string', description: 'Substring of person name (case-insensitive). Resolved via /people.json.' },
+                scope: {
+                  type: 'string',
+                  enum: ['overdue', 'due_today', 'due_tomorrow', 'due_later_this_week', 'due_next_week', 'due_later'],
+                  description: 'Optional due-date scope filter. Scopes are disjoint.',
+                },
+                bucket: { type: 'string', description: 'Optional project ID, or comma-separated list, to scope the recordings query.' },
+              },
+            },
+          },
 
           // Card Table tools
           {
@@ -602,6 +664,110 @@ class BasecampMCPServer {
                   status: 'success',
                   todos,
                   count: todos.length
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'get_my_profile': {
+            const profile = await client.getMyProfile();
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ status: 'success', profile }, null, 2)
+              }]
+            };
+          }
+
+          case 'get_my_assignments': {
+            const assignments = await client.getMyAssignments();
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  status: 'success',
+                  priorities: assignments.priorities,
+                  non_priorities: assignments.non_priorities,
+                  count: (assignments.priorities?.length ?? 0) + (assignments.non_priorities?.length ?? 0),
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'get_my_due_assignments': {
+            const assignments = await client.getMyDueAssignments(typedArgs.scope);
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  status: 'success',
+                  scope: typedArgs.scope ?? 'overdue',
+                  assignments,
+                  count: assignments.length,
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'get_my_completed_assignments': {
+            const assignments = await client.getMyCompletedAssignments();
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  status: 'success',
+                  assignments,
+                  count: assignments.length,
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'get_people': {
+            const people = await client.getPeople();
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  status: 'success',
+                  people,
+                  count: people.length,
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'get_project_people': {
+            const people = await client.getProjectPeople(typedArgs.project_id);
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  status: 'success',
+                  people,
+                  count: people.length,
+                }, null, 2)
+              }]
+            };
+          }
+
+          case 'get_assignments_for_person': {
+            const assignments = await client.findAssignmentsForPerson({
+              personId: typedArgs.person_id,
+              personName: typedArgs.person_name,
+              scope: typedArgs.scope,
+              bucket: typedArgs.bucket,
+            });
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  status: 'success',
+                  scope: typedArgs.scope ?? null,
+                  person_id: typedArgs.person_id ?? null,
+                  person_name: typedArgs.person_name ?? null,
+                  assignments,
+                  count: assignments.length,
                 }, null, 2)
               }]
             };

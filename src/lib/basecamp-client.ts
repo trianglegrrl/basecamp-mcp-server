@@ -17,7 +17,58 @@ import type {
   QuestionAnswer,
   OAuthTokens,
   AuthMode,
+  Person,
+  Assignment,
+  AssignmentScope,
+  MyAssignmentsResponse,
 } from '../types/basecamp.js';
+
+const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
+  'overdue',
+  'due_today',
+  'due_tomorrow',
+  'due_later_this_week',
+  'due_next_week',
+  'due_later',
+];
+
+function parseNextLink(linkHeader?: string): string | null {
+  if (!linkHeader) return null;
+  const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+  return match ? match[1] : null;
+}
+
+function addDays(iso: string, days: number): string {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// Mon-start week. Returns ISO date for Monday of week containing `iso`.
+function weekStart(iso: string): string {
+  const d = new Date(iso + 'T00:00:00Z');
+  const dow = d.getUTCDay(); // 0=Sun..6=Sat
+  const offsetToMon = dow === 0 ? -6 : 1 - dow;
+  return addDays(iso, offsetToMon);
+}
+
+function matchesScope(dueOn: string | null | undefined, scope: AssignmentScope, today: string): boolean {
+  if (!dueOn) return false;
+  const tomorrow = addDays(today, 1);
+  const thisMon = weekStart(today);
+  const thisSun = addDays(thisMon, 6);
+  const nextMon = addDays(thisMon, 7);
+  const nextSun = addDays(nextMon, 6);
+
+  switch (scope) {
+    case 'overdue':            return dueOn < today;
+    case 'due_today':          return dueOn === today;
+    case 'due_tomorrow':       return dueOn === tomorrow;
+    case 'due_later_this_week': return dueOn > tomorrow && dueOn <= thisSun;
+    case 'due_next_week':       return dueOn >= nextMon && dueOn <= nextSun;
+    case 'due_later':           return dueOn > nextSun;
+  }
+}
 
 export class BasecampClient {
   private client: AxiosInstance;
@@ -110,6 +161,109 @@ export class BasecampClient {
   async getTodo(todoId: string): Promise<Todo> {
     const response = await this.client.get(`/todos/${todoId}.json`);
     return response.data;
+  }
+
+  // My / assignments / people methods
+  async getMyProfile(): Promise<Person> {
+    const response = await this.client.get('/my/profile.json');
+    return response.data;
+  }
+
+  async getMyAssignments(): Promise<MyAssignmentsResponse> {
+    const response = await this.client.get('/my/assignments.json');
+    return response.data;
+  }
+
+  async getMyCompletedAssignments(): Promise<Assignment[]> {
+    const response = await this.client.get('/my/assignments/completed.json');
+    return response.data;
+  }
+
+  async getMyDueAssignments(scope?: AssignmentScope): Promise<Assignment[]> {
+    if (scope !== undefined && !VALID_ASSIGNMENT_SCOPES.includes(scope)) {
+      throw new Error(
+        `Invalid scope '${scope}'. Valid options: ${VALID_ASSIGNMENT_SCOPES.join(', ')}`
+      );
+    }
+    const params: Record<string, string> = {};
+    if (scope) params.scope = scope;
+    const response = await this.client.get('/my/assignments/due.json', { params });
+    return response.data;
+  }
+
+  async getPeople(): Promise<Person[]> {
+    const response = await this.client.get('/people.json');
+    return response.data;
+  }
+
+  async getProjectPeople(projectId: string): Promise<Person[]> {
+    const response = await this.client.get(`/projects/${projectId}/people.json`);
+    return response.data;
+  }
+
+  async getRecordingsTodos(opts: { bucket?: string; status?: 'active' | 'archived' | 'trashed' } = {}): Promise<any[]> {
+    const params: Record<string, string> = { type: 'Todo' };
+    if (opts.bucket) params.bucket = opts.bucket;
+    if (opts.status) params.status = opts.status;
+
+    const all: any[] = [];
+    let response = await this.client.get('/projects/recordings.json', { params });
+    while (true) {
+      all.push(...response.data);
+      const next = parseNextLink(response.headers?.link || response.headers?.Link);
+      if (!next) break;
+      response = await this.client.get(next);
+    }
+    return all;
+  }
+
+  async findAssignmentsForPerson(opts: {
+    personId?: number | string;
+    personName?: string;
+    scope?: AssignmentScope;
+    bucket?: string;
+    today?: string;
+  }): Promise<any[]> {
+    if (opts.scope !== undefined && !VALID_ASSIGNMENT_SCOPES.includes(opts.scope)) {
+      throw new Error(
+        `Invalid scope '${opts.scope}'. Valid options: ${VALID_ASSIGNMENT_SCOPES.join(', ')}`
+      );
+    }
+
+    let personId = opts.personId;
+    const needle = opts.personName?.toLowerCase();
+
+    if (!personId && needle) {
+      const people = await this.getPeople();
+      const match = people.find(p => p.name?.toLowerCase().includes(needle));
+      if (match) personId = match.id;
+    }
+
+    if (!personId && !needle) {
+      throw new Error('findAssignmentsForPerson requires either personId or personName');
+    }
+
+    const todos = await this.getRecordingsTodos({ bucket: opts.bucket });
+
+    if (!personId && needle) {
+      // /people.json is filtered to current-user-visible. Fall back to assignees seen in recordings.
+      for (const t of todos) {
+        const hit = (t.assignees || []).find((a: any) => a.name?.toLowerCase().includes(needle));
+        if (hit) { personId = hit.id; break; }
+      }
+      if (!personId) {
+        throw new Error(`No person matching '${opts.personName}' visible to current user (checked /people.json and recording assignees)`);
+      }
+    }
+    const idStr = String(personId);
+    const assigned = todos.filter(t =>
+      Array.isArray(t.assignees) && t.assignees.some((a: any) => String(a.id) === idStr)
+    );
+
+    if (!opts.scope) return assigned;
+
+    const today = opts.today || new Date().toISOString().slice(0, 10);
+    return assigned.filter(t => matchesScope(t.due_on, opts.scope!, today));
   }
 
   // Card Table methods

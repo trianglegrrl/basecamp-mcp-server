@@ -190,6 +190,36 @@ export interface QuestionAnswer {
   creator: Person;
 }
 
+export type AssignmentScope =
+  | 'overdue'
+  | 'due_today'
+  | 'due_tomorrow'
+  | 'due_later_this_week'
+  | 'due_next_week'
+  | 'due_later';
+
+export interface Assignment {
+  id: string | number;
+  app_url?: string;
+  content: string;
+  starts_on?: string | null;
+  due_on?: string | null;
+  bucket: { id: string | number; name: string; app_url?: string };
+  completed: boolean;
+  type: string;
+  assignees: Array<{ id: string | number; name: string }>;
+  comments_count?: number;
+  has_description?: boolean;
+  priority_recording_id?: string | number;
+  parent?: { id: string | number; title: string; app_url?: string };
+  children?: Assignment[];
+}
+
+export interface MyAssignmentsResponse {
+  priorities: Assignment[];
+  non_priorities: Assignment[];
+}
+
 export interface SearchResults {
   projects?: BasecampProject[];
   todos?: Todo[];

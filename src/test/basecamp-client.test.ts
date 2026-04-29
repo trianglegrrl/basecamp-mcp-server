@@ -285,6 +285,259 @@ describe('BasecampClient', () => {
     });
   });
 
+  describe('My / Assignments Methods', () => {
+    beforeEach(() => {
+      client = new BasecampClient({
+        accessToken: 'test-token',
+        accountId: '12345',
+        userAgent: 'Test Agent',
+        authMode: 'oauth'
+      });
+    });
+
+    it('should get current user profile', async () => {
+      const profile = { id: 1049715913, name: 'Victor Cooper', email_address: 'v@example.com' };
+      mockAxiosInstance.get.mockResolvedValue({ data: profile });
+
+      const result = await client.getMyProfile();
+
+      expect(result).toEqual(profile);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/my/profile.json');
+    });
+
+    it('should get my assignments grouped by priority', async () => {
+      const payload = { priorities: [{ id: 1 }], non_priorities: [{ id: 2 }] };
+      mockAxiosInstance.get.mockResolvedValue({ data: payload });
+
+      const result = await client.getMyAssignments();
+
+      expect(result).toEqual(payload);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/my/assignments.json');
+    });
+
+    it('should get my completed assignments', async () => {
+      const payload = [{ id: 1, completed: true }];
+      mockAxiosInstance.get.mockResolvedValue({ data: payload });
+
+      const result = await client.getMyCompletedAssignments();
+
+      expect(result).toEqual(payload);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/my/assignments/completed.json');
+    });
+
+    it('should get my due assignments with default scope', async () => {
+      mockAxiosInstance.get.mockResolvedValue({ data: [] });
+
+      await client.getMyDueAssignments();
+
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/my/assignments/due.json', { params: {} });
+    });
+
+    it('should get my due assignments with explicit scope', async () => {
+      mockAxiosInstance.get.mockResolvedValue({ data: [] });
+
+      await client.getMyDueAssignments('overdue');
+
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/my/assignments/due.json', { params: { scope: 'overdue' } });
+    });
+
+    it('should reject invalid scope before hitting the network', async () => {
+      mockAxiosInstance.get.mockResolvedValue({ data: [] });
+
+      await expect(
+        client.getMyDueAssignments('not-a-real-scope' as any)
+      ).rejects.toThrow(/Invalid scope/);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+
+    it('should get all visible people', async () => {
+      const payload = [{ id: 1, name: 'A' }, { id: 2, name: 'B' }];
+      mockAxiosInstance.get.mockResolvedValue({ data: payload });
+
+      const result = await client.getPeople();
+
+      expect(result).toEqual(payload);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/people.json');
+    });
+
+    it('should get people on a project', async () => {
+      const payload = [{ id: 1, name: 'A' }];
+      mockAxiosInstance.get.mockResolvedValue({ data: payload });
+
+      const result = await client.getProjectPeople('555');
+
+      expect(result).toEqual(payload);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/projects/555/people.json');
+    });
+  });
+
+  describe('Recordings + cross-user assignments', () => {
+    beforeEach(() => {
+      client = new BasecampClient({
+        accessToken: 'test-token',
+        accountId: '12345',
+        userAgent: 'Test Agent',
+        authMode: 'oauth'
+      });
+    });
+
+    it('returns single page when no Link header', async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: [{ id: 1 }, { id: 2 }],
+        headers: {},
+      });
+
+      const todos = await client.getRecordingsTodos();
+
+      expect(todos).toEqual([{ id: 1 }, { id: 2 }]);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/projects/recordings.json', { params: { type: 'Todo' } });
+    });
+
+    it('follows Link rel="next" until exhausted', async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({
+          data: [{ id: 1 }],
+          headers: { link: '<https://3.basecampapi.com/12345/projects/recordings.json?page=2&type=Todo>; rel="next"' },
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 2 }],
+          headers: { link: '<https://3.basecampapi.com/12345/projects/recordings.json?page=3&type=Todo>; rel="next"' },
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 3 }],
+          headers: {},
+        });
+
+      const todos = await client.getRecordingsTodos();
+
+      expect(todos).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(3);
+    });
+
+    it('passes bucket and status params on first call', async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: [], headers: {} });
+
+      await client.getRecordingsTodos({ bucket: '17752317,45799317', status: 'archived' });
+
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/projects/recordings.json', {
+        params: { type: 'Todo', bucket: '17752317,45799317', status: 'archived' },
+      });
+    });
+
+    it('findAssignmentsForPerson filters by personId', async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: [
+          { id: 1, content: 'A', due_on: null, assignees: [{ id: 100, name: 'Alice' }] },
+          { id: 2, content: 'B', due_on: null, assignees: [{ id: 200, name: 'Bob' }] },
+          { id: 3, content: 'C', due_on: null, assignees: [{ id: 100, name: 'Alice' }, { id: 200, name: 'Bob' }] },
+        ],
+        headers: {},
+      });
+
+      const result = await client.findAssignmentsForPerson({ personId: 100 });
+
+      expect(result.map((t: any) => t.id)).toEqual([1, 3]);
+    });
+
+    it('findAssignmentsForPerson resolves personName via /people.json', async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({
+          data: [{ id: 100, name: 'Jill Smith' }, { id: 200, name: 'Bob Jones' }],
+        })
+        .mockResolvedValueOnce({
+          data: [
+            { id: 1, content: 'A', due_on: null, assignees: [{ id: 100, name: 'Jill Smith' }] },
+            { id: 2, content: 'B', due_on: null, assignees: [{ id: 200, name: 'Bob Jones' }] },
+          ],
+          headers: {},
+        });
+
+      const result = await client.findAssignmentsForPerson({ personName: 'jill' });
+
+      expect(result.map((t: any) => t.id)).toEqual([1]);
+      expect(mockAxiosInstance.get.mock.calls[0][0]).toBe('/people.json');
+    });
+
+    it('findAssignmentsForPerson throws when name has no match anywhere', async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: [{ id: 100, name: 'Jill Smith' }] }) // /people.json
+        .mockResolvedValueOnce({ data: [], headers: {} }); // recordings empty
+
+      await expect(
+        client.findAssignmentsForPerson({ personName: 'nobody' })
+      ).rejects.toThrow(/No person matching/);
+    });
+
+    it('findAssignmentsForPerson falls back to assignees when /people.json misses (e.g. cross-company person)', async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({
+          // /people.json returns visible-to-current-user only — does NOT include Suzanne
+          data: [{ id: 100, name: 'Jill Smith' }],
+        })
+        .mockResolvedValueOnce({
+          // recordings — Suzanne shows up here as an assignee even though she wasn't in /people.json
+          data: [
+            { id: 1, content: 'X', due_on: null, assignees: [{ id: 999, name: 'Suzanne Hiscock' }] },
+            { id: 2, content: 'Y', due_on: null, assignees: [{ id: 100, name: 'Jill Smith' }] },
+          ],
+          headers: {},
+        });
+
+      const result = await client.findAssignmentsForPerson({ personName: 'suzanne' });
+
+      expect(result.map((t: any) => t.id)).toEqual([1]);
+    });
+
+    it('findAssignmentsForPerson scope=overdue filters past due dates', async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: [
+          { id: 1, content: 'past', due_on: '2026-04-20', assignees: [{ id: 100 }] },
+          { id: 2, content: 'today', due_on: '2026-04-29', assignees: [{ id: 100 }] },
+          { id: 3, content: 'future', due_on: '2026-05-15', assignees: [{ id: 100 }] },
+          { id: 4, content: 'no-due', due_on: null, assignees: [{ id: 100 }] },
+        ],
+        headers: {},
+      });
+
+      const result = await client.findAssignmentsForPerson({ personId: 100, scope: 'overdue', today: '2026-04-29' });
+
+      expect(result.map((t: any) => t.id)).toEqual([1]);
+    });
+
+    it('findAssignmentsForPerson scope=due_today', async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: [
+          { id: 1, due_on: '2026-04-28', assignees: [{ id: 100 }] },
+          { id: 2, due_on: '2026-04-29', assignees: [{ id: 100 }] },
+          { id: 3, due_on: '2026-04-30', assignees: [{ id: 100 }] },
+        ],
+        headers: {},
+      });
+
+      const result = await client.findAssignmentsForPerson({ personId: 100, scope: 'due_today', today: '2026-04-29' });
+
+      expect(result.map((t: any) => t.id)).toEqual([2]);
+    });
+
+    it('findAssignmentsForPerson scope=due_later_this_week (today=Wed → Fri-Sun, tomorrow excluded)', async () => {
+      // 2026-04-29 = Wed. due_today=Wed, due_tomorrow=Thu(30), later_this_week=Fri(May 1)-Sun(May 3). Scopes disjoint.
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: [
+          { id: 1, due_on: '2026-04-30', assignees: [{ id: 100 }] }, // Thu = tomorrow, excluded
+          { id: 2, due_on: '2026-05-01', assignees: [{ id: 100 }] }, // Fri, included
+          { id: 3, due_on: '2026-05-03', assignees: [{ id: 100 }] }, // Sun, included
+          { id: 4, due_on: '2026-05-04', assignees: [{ id: 100 }] }, // next Mon, excluded
+        ],
+        headers: {},
+      });
+
+      const result = await client.findAssignmentsForPerson({ personId: 100, scope: 'due_later_this_week', today: '2026-04-29' });
+
+      expect(result.map((t: any) => t.id)).toEqual([2, 3]);
+    });
+  });
+
   describe('Card Table Methods', () => {
     beforeEach(() => {
       client = new BasecampClient({

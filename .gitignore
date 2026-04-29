@@ -110,3 +110,9 @@ composio_client_example.py
 config.local.*
 *.local
 .py
+
+# Claude Code per-machine settings
+.claude/settings.local.json
+
+# oh-my-claudecode runtime state
+.omc/
