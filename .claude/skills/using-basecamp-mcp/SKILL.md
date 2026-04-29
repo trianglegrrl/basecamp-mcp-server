@@ -1,6 +1,6 @@
 ---
 name: using-basecamp-mcp
-description: Use when the user wants to query Basecamp 3 through this MCP server — find their own tasks, find someone else's tasks ("show me Jill's tasks due this week"), filter by due-date scope (overdue, today, this week, next week), look up who's on a project, send a Basecamp summary to Slack, or otherwise drive the basecamp-* MCP tools. Triggers on phrases like "my tasks", "<person>'s tasks", "overdue", "due today/this week", "what's on Erin's plate", "L2 project tasks", "send to Slack channel".
+description: Use when the user wants to query Basecamp 3 through this MCP server — find their own tasks, find someone else's tasks ("show me Jill's tasks due this week"), filter by due-date scope (overdue, today, this week, next week), look up who's on a project, send a Basecamp summary to Slack, or otherwise drive the basecamp-* MCP tools. Triggers on phrases like "my tasks", "[person]'s tasks", "overdue", "due today/this week", "what's on Erin's plate", "L2 project tasks", "send to Slack channel".
 ---
 
 # Using the Basecamp MCP server
@@ -20,13 +20,13 @@ When the user asks a Basecamp question, your job is to pick the cheapest tool th
 | "my tasks due today/tomorrow/this week" | `get_my_due_assignments` with the matching `scope` |
 | "what have I finished" | `get_my_completed_assignments` |
 | "who am I" / "what's my email" | `get_my_profile` |
-| **"show me <Name>'s tasks"** (any filter or none) | `get_assignments_for_person` with `person_name` |
+| **"show me [Name]'s tasks"** (any filter or none) | `get_assignments_for_person` with `person_name` |
 | "who is on the L2 project" / "list project members" | `get_project_people` with `project_id` |
 | "list everyone in the account" | `get_people` |
 | "what projects do we have" | `get_projects` |
 | "what's in this project" | `get_project` (returns the dock — todoset id, card_table id, etc.) |
-| "show me the to-do lists in <project>" | `get_todolists` |
-| "show me todos in <list>" | `get_todos` |
+| "show me the to-do lists in [project]" | `get_todolists` |
+| "show me todos in [list]" | `get_todos` |
 | Card-table work (kanban) | `get_card_table` → `get_columns` → `get_cards` |
 
 **Never** walk every project's todolists by hand to answer a "who has overdue tasks" question — use the recordings-backed assignment tools (`get_my_*` or `get_assignments_for_person`).
@@ -51,8 +51,8 @@ If the user says "this week" without specifying, ask: "do you want everything fr
 ### "Send my overdue tasks to the L2 Slack channel"
 
 1. `get_my_due_assignments` with `scope=overdue`
-2. Optionally filter the response to `bucket.id == <L2 project id>` if "L2" is one specific Basecamp project
-3. Format as Slack-ready markdown: `<title> · due <due_on> · <bucket.name>` (one per line)
+2. Optionally filter the response to `bucket.id == [L2 project id]` if "L2" is one specific Basecamp project
+3. Format as Slack-ready markdown: `[title] · due [due_on] · [bucket.name]` (one per line)
 4. Post via the Slack tool the user has configured. **Do not** guess channel ids — ask if not given.
 
 ### "Show me Jill's tasks due this week"
@@ -63,7 +63,7 @@ If the user says "this week" without specifying, ask: "do you want everything fr
 
 ### "What's on the L2 project?"
 
-1. `get_projects` to find the project named "L2" (or the user gives the URL — extract the numeric id from the path: `https://3.basecamp.com/<account>/projects/<project_id>`)
+1. `get_projects` to find the project named "L2" (or the user gives the URL — extract the numeric id from the path: `https://3.basecamp.com/[account]/projects/[project_id]`)
 2. `get_project` for the dock (lists `todoset`, `card_table`, etc.)
 3. From there choose: `get_todolists` for to-do lists, or `get_card_table` → `get_columns` → `get_cards` for kanban
 
@@ -71,7 +71,7 @@ If the user says "this week" without specifying, ask: "do you want everything fr
 
 | Pitfall | Symptom | What to do |
 |---|---|---|
-| **The token belongs to a service account, not the asking user** | `get_my_assignments` returns `{priorities: [], non_priorities: []}` even though the user clearly has tasks in Basecamp | The "me" in `/my/*` endpoints is whoever ran OAuth, not whoever is talking to Claude. If the user's name doesn't match `get_my_profile`, switch to `get_assignments_for_person` with `person_name=<their name>`. |
+| **The token belongs to a service account, not the asking user** | `get_my_assignments` returns `{priorities: [], non_priorities: []}` even though the user clearly has tasks in Basecamp | The "me" in `/my/*` endpoints is whoever ran OAuth, not whoever is talking to Claude. If the user's name doesn't match `get_my_profile`, switch to `get_assignments_for_person` with `person_name=[their name]`. |
 | **403 "You must first seek admission"** | `get_project_people` or `get_todolists` returns an admission error for some projects | The token's user isn't a member of that bucket. Tell the user — don't try to auto-join. Offer to retry without that project's bucket filter. |
 | **Person not in `get_people` but tasks visible** | `get_assignments_for_person` says "no person matching X" for someone you can clearly see | `/people.json` is filtered to people-visible-to-current-user. The tool already falls back to scanning recording assignees, so try again — if it still misses, the person genuinely has no assigned recordings the token can see. |
 | **Cross-user lookups are slow** | `get_assignments_for_person` takes 5–15s | Expected — BC3 has no server-side assignee filter, so the tool walks `/projects/recordings.json?type=Todo` (paginated) and filters client-side. Don't run it in a tight loop; ask once with the right scope. |
