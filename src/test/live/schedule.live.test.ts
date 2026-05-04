@@ -34,8 +34,9 @@ describe('schedule lifecycle (LIVE)', () => {
   it('get_schedule_entry: round-trips the created fields', async () => {
     const fetched = await ctx.client.getScheduleEntry(ctx.projectId, entryId);
     expect((fetched as any).summary).toContain(ctx.prefix);
-    expect((fetched as any).starts_at).toBe(STARTS_AT);
-    expect((fetched as any).ends_at).toBe(ENDS_AT);
+    // BC3 returns ISO datetimes with ms precision; parse both sides for tolerance.
+    expect(new Date((fetched as any).starts_at).getTime()).toBe(new Date(STARTS_AT).getTime());
+    expect(new Date((fetched as any).ends_at).getTime()).toBe(new Date(ENDS_AT).getTime());
   });
 
   it("update_schedule_entry: 'full' merge preserves times while changing summary", async () => {
@@ -44,8 +45,8 @@ describe('schedule lifecycle (LIVE)', () => {
     });
     const fetched = await ctx.client.getScheduleEntry(ctx.projectId, entryId);
     expect((fetched as any).summary).toContain('updated summary');
-    expect((fetched as any).starts_at).toBe(STARTS_AT);
-    expect((fetched as any).ends_at).toBe(ENDS_AT);
+    expect(new Date((fetched as any).starts_at).getTime()).toBe(new Date(STARTS_AT).getTime());
+    expect(new Date((fetched as any).ends_at).getTime()).toBe(new Date(ENDS_AT).getTime());
   });
 
   it('set_schedule_entry_status: trashed', async () => {
