@@ -561,4 +561,46 @@ export const tools: Tool[] = [
       required: ['project_id', 'todo_id', 'position'],
     },
   },
+
+  // Todo list write tools
+  {
+    name: 'get_todolist',
+    description: 'Get a single todo list by ID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todolist_id: { type: 'string', description: 'The todo list ID' },
+      },
+      required: ['project_id', 'todolist_id'],
+    },
+  },
+  {
+    name: 'create_todolist',
+    description: 'Create a new todo list under a project\'s todo set',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todoset_id: { type: 'string', description: 'The todo set ID (the project\'s todo set, see project.dock for entry name=todoset)' },
+        name: { type: 'string', description: 'The todo list name (required)' },
+        description: { type: 'string', description: 'Optional rich-text description (HTML)' },
+      },
+      required: ['project_id', 'todoset_id', 'name'],
+    },
+  },
+  {
+    name: 'update_todolist',
+    description: 'Update name or description of a todo list. Omitted fields are preserved (fetch-then-merge).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todolist_id: { type: 'string', description: 'The todo list ID' },
+        name: { type: 'string', description: 'New name' },
+        description: { type: 'string', description: 'New rich-text description (HTML)' },
+      },
+      required: ['project_id', 'todolist_id'],
+    },
+  },
 ];
