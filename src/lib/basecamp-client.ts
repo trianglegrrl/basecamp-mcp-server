@@ -22,6 +22,7 @@ import type {
   AssignmentScope,
   MyAssignmentsResponse,
 } from '../types/basecamp.js';
+import { parseNextLink } from './pagination.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -31,12 +32,6 @@ const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'due_next_week',
   'due_later',
 ];
-
-function parseNextLink(linkHeader?: string): string | null {
-  if (!linkHeader) return null;
-  const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-  return match ? match[1] : null;
-}
 
 function addDays(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00Z');
