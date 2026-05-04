@@ -1,0 +1,474 @@
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+
+export const tools: Tool[] = [
+  // Core tools
+  {
+    name: 'get_projects',
+    description: 'Get all Basecamp projects',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'get_project',
+    description: 'Get details for a specific project',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+      },
+      required: ['project_id'],
+    },
+  },
+
+  // Todo tools
+  {
+    name: 'get_todolists',
+    description: 'Get todo lists for a project',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'get_todos',
+    description: 'Get todos from a todo list',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project ID' },
+        todolist_id: { type: 'string', description: 'The todo list ID' },
+      },
+      required: ['project_id', 'todolist_id'],
+    },
+  },
+  {
+    name: 'get_my_profile',
+    description: 'Get the current authenticated user\'s profile (id, name, email). Useful before filtering tasks "assigned to me".',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_my_assignments',
+    description: 'Get the current user\'s active assignments (todos and card steps assigned to me) across all projects, grouped into priorities and non_priorities. Includes due_on and bucket (project) info.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_my_due_assignments',
+    description: 'Get the current user\'s assignments filtered by due-date scope. Defaults to "overdue" when scope omitted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: {
+          type: 'string',
+          enum: ['overdue', 'due_today', 'due_tomorrow', 'due_later_this_week', 'due_next_week', 'due_later'],
+          description: 'Due-date scope filter. Omit for server default (overdue).',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_my_completed_assignments',
+    description: 'Get the current user\'s completed assignments (excludes archived/trashed).',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_people',
+    description: 'List all people visible to the current user across the account.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_project_people',
+    description: 'List active people on a given project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'get_assignments_for_person',
+    description: 'Find todos assigned to ANY person (not just current user). Use to answer questions like "show me Jill\'s tasks due this week". Provide person_id OR person_name (case-insensitive substring match against /people.json). Optional scope filter (overdue, due_today, due_tomorrow, due_later_this_week, due_next_week, due_later) and bucket filter (project ID, comma-separated). Walks /projects/recordings.json?type=Todo and filters client-side; assignee filtering is not server-side in BC3.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        person_id: { type: ['string', 'number'], description: 'Basecamp person id (preferred when known)' },
+        person_name: { type: 'string', description: 'Substring of person name (case-insensitive). Resolved via /people.json.' },
+        scope: {
+          type: 'string',
+          enum: ['overdue', 'due_today', 'due_tomorrow', 'due_later_this_week', 'due_next_week', 'due_later'],
+          description: 'Optional due-date scope filter. Scopes are disjoint.',
+        },
+        bucket: { type: 'string', description: 'Optional project ID, or comma-separated list, to scope the recordings query.' },
+      },
+    },
+  },
+
+  // Card Table tools
+  {
+    name: 'get_card_table',
+    description: 'Get the card table details for a project',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'get_columns',
+    description: 'Get all columns in a card table',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        card_table_id: { type: 'string', description: 'The card table ID' },
+      },
+      required: ['project_id', 'card_table_id'],
+    },
+  },
+  {
+    name: 'get_cards',
+    description: 'Get all cards in a column',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        column_id: { type: 'string', description: 'The column ID' },
+      },
+      required: ['project_id', 'column_id'],
+    },
+  },
+  {
+    name: 'create_card',
+    description: 'Create a new card in a column',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        column_id: { type: 'string', description: 'The column ID' },
+        title: { type: 'string', description: 'The card title' },
+        content: { type: 'string', description: 'Optional card content/description' },
+        due_on: { type: 'string', description: 'Optional due date (ISO 8601 format)' },
+        notify: { type: 'boolean', description: 'Whether to notify assignees (default: false)' },
+      },
+      required: ['project_id', 'column_id', 'title'],
+    },
+  },
+
+  // Column Management tools
+  {
+    name: 'create_column',
+    description: 'Create a new column in a card table',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        card_table_id: { type: 'string', description: 'The card table ID' },
+        title: { type: 'string', description: 'The column title' },
+      },
+      required: ['project_id', 'card_table_id', 'title'],
+    },
+  },
+  {
+    name: 'update_column',
+    description: 'Update a column title',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        column_id: { type: 'string', description: 'The column ID' },
+        title: { type: 'string', description: 'The new column title' },
+      },
+      required: ['project_id', 'column_id', 'title'],
+    },
+  },
+  {
+    name: 'move_column',
+    description: 'Move a column to a new position',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        card_table_id: { type: 'string', description: 'The card table ID' },
+        column_id: { type: 'string', description: 'The column ID' },
+        position: { type: 'number', description: 'The new 1-based position' },
+      },
+      required: ['project_id', 'card_table_id', 'column_id', 'position'],
+    },
+  },
+  {
+    name: 'update_column_color',
+    description: 'Update a column color',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        column_id: { type: 'string', description: 'The column ID' },
+        color: { type: 'string', description: 'The hex color code (e.g., #FF0000)' },
+      },
+      required: ['project_id', 'column_id', 'color'],
+    },
+  },
+
+  // Card Management tools
+  {
+    name: 'get_card',
+    description: 'Get details for a specific card',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        card_id: { type: 'string', description: 'The card ID' },
+      },
+      required: ['project_id', 'card_id'],
+    },
+  },
+  {
+    name: 'update_card',
+    description: 'Update a card',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        card_id: { type: 'string', description: 'The card ID' },
+        title: { type: 'string', description: 'The new card title' },
+        content: { type: 'string', description: 'The new card content/description' },
+        due_on: { type: 'string', description: 'Due date (ISO 8601 format)' },
+        assignee_ids: { type: 'array', items: { type: 'string' }, description: 'Array of person IDs to assign to the card' },
+      },
+      required: ['project_id', 'card_id'],
+    },
+  },
+  {
+    name: 'move_card',
+    description: 'Move a card to a new column',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        card_id: { type: 'string', description: 'The card ID' },
+        column_id: { type: 'string', description: 'The destination column ID' },
+      },
+      required: ['project_id', 'card_id', 'column_id'],
+    },
+  },
+  {
+    name: 'complete_card',
+    description: 'Mark a card as complete',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        card_id: { type: 'string', description: 'The card ID' },
+      },
+      required: ['project_id', 'card_id'],
+    },
+  },
+
+  // Card Steps tools
+  {
+    name: 'get_card_steps',
+    description: 'Get all steps (sub-tasks) for a card',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        card_id: { type: 'string', description: 'The card ID' },
+      },
+      required: ['project_id', 'card_id'],
+    },
+  },
+  {
+    name: 'create_card_step',
+    description: 'Create a new step (sub-task) for a card',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        card_id: { type: 'string', description: 'The card ID' },
+        title: { type: 'string', description: 'The step title' },
+        due_on: { type: 'string', description: 'Optional due date (ISO 8601 format)' },
+        assignee_ids: { type: 'array', items: { type: 'string' }, description: 'Array of person IDs to assign to the step' },
+      },
+      required: ['project_id', 'card_id', 'title'],
+    },
+  },
+  {
+    name: 'complete_card_step',
+    description: 'Mark a card step as complete',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        step_id: { type: 'string', description: 'The step ID' },
+      },
+      required: ['project_id', 'step_id'],
+    },
+  },
+
+  // Communication tools
+  {
+    name: 'get_campfire_lines',
+    description: 'Get recent messages from a Basecamp campfire (chat room)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        campfire_id: { type: 'string', description: 'The campfire/chat room ID' },
+      },
+      required: ['project_id', 'campfire_id'],
+    },
+  },
+  {
+    name: 'get_comments',
+    description: 'Get comments for a Basecamp item',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        recording_id: { type: 'string', description: 'The item ID' },
+        project_id: { type: 'string', description: 'The project ID' },
+      },
+      required: ['recording_id', 'project_id'],
+    },
+  },
+
+  // Document tools
+  {
+    name: 'get_documents',
+    description: 'List documents in a vault',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project ID' },
+        vault_id: { type: 'string', description: 'Vault ID' },
+      },
+      required: ['project_id', 'vault_id'],
+    },
+  },
+  {
+    name: 'create_document',
+    description: 'Create a document in a vault',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project ID' },
+        vault_id: { type: 'string', description: 'Vault ID' },
+        title: { type: 'string', description: 'Document title' },
+        content: { type: 'string', description: 'Document HTML content' },
+      },
+      required: ['project_id', 'vault_id', 'title', 'content'],
+    },
+  },
+  {
+    name: 'update_document',
+    description: 'Update a document',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project ID' },
+        document_id: { type: 'string', description: 'Document ID' },
+        title: { type: 'string', description: 'New title' },
+        content: { type: 'string', description: 'New HTML content' },
+      },
+      required: ['project_id', 'document_id'],
+    },
+  },
+  {
+    name: 'trash_document',
+    description: 'Move a document to trash',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project ID' },
+        document_id: { type: 'string', description: 'Document ID' },
+      },
+      required: ['project_id', 'document_id'],
+    },
+  },
+
+  // File tools
+  {
+    name: 'get_uploads',
+    description: 'List uploads in a project or vault',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project ID' },
+        vault_id: { type: 'string', description: 'Optional vault ID to limit to specific vault' },
+      },
+      required: ['project_id'],
+    },
+  },
+
+  // Webhook tools
+  {
+    name: 'get_webhooks',
+    description: 'List webhooks for a project',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project ID' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'create_webhook',
+    description: 'Create a webhook',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project ID' },
+        payload_url: { type: 'string', description: 'Payload URL' },
+        types: { type: 'array', items: { type: 'string' }, description: 'Event types' },
+      },
+      required: ['project_id', 'payload_url'],
+    },
+  },
+  {
+    name: 'delete_webhook',
+    description: 'Delete a webhook',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project ID' },
+        webhook_id: { type: 'string', description: 'Webhook ID' },
+      },
+      required: ['project_id', 'webhook_id'],
+    },
+  },
+
+  // Check-in tools
+  {
+    name: 'get_daily_check_ins',
+    description: "Get project's daily checking questionnaire",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        page: { type: 'number', description: 'Page number for paginated response' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'get_question_answers',
+    description: 'Get answers on daily check-in question',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        question_id: { type: 'string', description: 'The question ID' },
+        page: { type: 'number', description: 'Page number for paginated response' },
+      },
+      required: ['project_id', 'question_id'],
+    },
+  },
+];
