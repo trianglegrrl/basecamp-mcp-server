@@ -116,6 +116,16 @@ export interface MessageCreateBody {
   subscriptions?: Array<number | string>;
 }
 
+// Public input shape for create_message — same as MessageCreateBody minus
+// the always-'active' status (which the resource layer adds). Lives here
+// so it follows the convention that all wire/input types are in this file.
+export interface CreateMessageInput {
+  subject: string;
+  content?: string;
+  category_id?: number | string;
+  subscriptions?: Array<number | string>;
+}
+
 export interface MessageUpdateBody {
   subject?: string;
   content?: string;
@@ -832,3 +842,1472 @@ Run: `git log --oneline -8`
 Expected: Five commits from Chunk 1, all in conventional-commit form.
 
 End of Chunk 1.
+
+---
+
+## Chunk 2a: Resource modules — todos, todolists, comments
+
+This chunk adds the BC3 HTTP methods for three of the five new resources. Each is its own file under `src/lib/resources/`, with a thin delegation method on `BasecampClient`. All work is TDD; each task is one resource module + its tests + the delegation methods + a single commit. The file pattern established in Chunk 1's `dock.ts` is the template: free functions taking an `AxiosInstance`, no class state.
+
+(Chunk 2 is split into 2a and 2b to keep each execution session under the 1000-line review cap. Same patterns; Chunk 2b covers messages, schedule, recording-status.)
+
+**Pattern reused in every task in this chunk:**
+
+```ts
+// Resource file shape:
+import type { AxiosInstance } from 'axios';
+import type { /* resource + body types */ } from '../../types/basecamp.js';
+
+export async function operationName(
+  client: AxiosInstance,
+  ...args: unknown[],
+): Promise<ReturnType> {
+  const response = await client.someVerb('/path.json', body);
+  return response.data;
+}
+
+// Test file shape — see dock.test.ts for the makeMockClient helper.
+// Each test asserts URL, HTTP method, and (for POST/PUT) body.
+```
+
+### Task 2a.1: Resource module — `src/lib/resources/todos.ts`
+
+Six methods: `getTodo`, `createTodo`, `updateTodo`, `completeTodo`, `uncompleteTodo`, `repositionTodo`. The `updateTodo` function uses `applyUpdate` with the `'full'` strategy.
+
+**Files:**
+- Create: `src/lib/resources/todos.ts`
+- Create: `src/test/resources/todos.test.ts`
+- Modify: `src/lib/basecamp-client.ts` (add 6 delegation methods)
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/resources/todos.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import {
+  getTodo,
+  createTodo,
+  updateTodo,
+  completeTodo,
+  uncompleteTodo,
+  repositionTodo,
+} from '../../lib/resources/todos.js';
+import type { AxiosInstance } from 'axios';
+
+function makeMockClient(): AxiosInstance & {
+  get: ReturnType<typeof vi.fn>;
+  post: ReturnType<typeof vi.fn>;
+  put: ReturnType<typeof vi.fn>;
+  delete: ReturnType<typeof vi.fn>;
+} {
+  return {
+    get: vi.fn(),
+    post: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+  } as any;
+}
+
+describe('todos resource', () => {
+  describe('getTodo', () => {
+    it('GETs /buckets/{p}/todos/{id}.json', async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({ data: { id: '1', content: 'x' } });
+      const result = await getTodo(client, '100', '1');
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/todos/1.json');
+      expect(result).toEqual({ id: '1', content: 'x' });
+    });
+  });
+
+  describe('createTodo', () => {
+    it('POSTs the body to /buckets/{p}/todolists/{tl}/todos.json', async () => {
+      const client = makeMockClient();
+      client.post.mockResolvedValue({ data: { id: '99', content: 'new' } });
+      const result = await createTodo(client, '100', '50', { content: 'new', due_on: '2026-09-01' });
+      expect(client.post).toHaveBeenCalledWith(
+        '/buckets/100/todolists/50/todos.json',
+        { content: 'new', due_on: '2026-09-01' },
+      );
+      expect(result.id).toBe('99');
+    });
+  });
+
+  describe('updateTodo', () => {
+    it("uses 'full' strategy: GETs current then PUTs whitelisted union", async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({
+        data: {
+          id: '1',
+          content: 'old',
+          description: 'desc',
+          assignee_ids: [10],
+          completion_subscriber_ids: [],
+          due_on: '2026-01-01',
+          starts_on: null,
+          notify: false,
+          created_at: 'x',
+        },
+      });
+      client.put.mockResolvedValue({ data: { id: '1', content: 'new' } });
+
+      await updateTodo(client, '100', '1', { content: 'new' });
+
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/todos/1.json');
+      expect(client.put).toHaveBeenCalledWith(
+        '/buckets/100/todos/1.json',
+        {
+          content: 'new',
+          description: 'desc',
+          assignee_ids: [10],
+          completion_subscriber_ids: [],
+          due_on: '2026-01-01',
+          starts_on: null,
+          notify: false,
+        },
+      );
+    });
+
+    it('skips PUT when patch is empty', async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({ data: { id: '1', content: 'old' } });
+      await updateTodo(client, '100', '1', {});
+      expect(client.put).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('completeTodo', () => {
+    it('POSTs to /buckets/{p}/todos/{id}/completion.json', async () => {
+      const client = makeMockClient();
+      client.post.mockResolvedValue({ data: undefined });
+      await completeTodo(client, '100', '1');
+      expect(client.post).toHaveBeenCalledWith('/buckets/100/todos/1/completion.json');
+    });
+  });
+
+  describe('uncompleteTodo', () => {
+    it('DELETEs /buckets/{p}/todos/{id}/completion.json', async () => {
+      const client = makeMockClient();
+      client.delete.mockResolvedValue({ data: undefined });
+      await uncompleteTodo(client, '100', '1');
+      expect(client.delete).toHaveBeenCalledWith('/buckets/100/todos/1/completion.json');
+    });
+  });
+
+  describe('repositionTodo', () => {
+    it('PUTs {position} to /buckets/{p}/todos/{id}/position.json', async () => {
+      const client = makeMockClient();
+      client.put.mockResolvedValue({ data: undefined });
+      await repositionTodo(client, '100', '1', 3);
+      expect(client.put).toHaveBeenCalledWith(
+        '/buckets/100/todos/1/position.json',
+        { position: 3 },
+      );
+    });
+
+    it('includes parent_id when provided', async () => {
+      const client = makeMockClient();
+      client.put.mockResolvedValue({ data: undefined });
+      await repositionTodo(client, '100', '1', 1, '777');
+      expect(client.put).toHaveBeenCalledWith(
+        '/buckets/100/todos/1/position.json',
+        { position: 1, parent_id: '777' },
+      );
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/resources/todos.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/lib/resources/todos.ts`:
+
+```ts
+import type { AxiosInstance } from 'axios';
+import { applyUpdate } from '../update-merge.js';
+import type { Todo, TodoCreateBody, TodoUpdateBody } from '../../types/basecamp.js';
+
+const TODO_UPDATE_WHITELIST = [
+  'content',
+  'description',
+  'assignee_ids',
+  'completion_subscriber_ids',
+  'due_on',
+  'starts_on',
+  'notify',
+] as const satisfies ReadonlyArray<keyof TodoUpdateBody & keyof Todo>;
+
+export async function getTodo(
+  client: AxiosInstance,
+  projectId: string,
+  todoId: string,
+): Promise<Todo> {
+  const response = await client.get(`/buckets/${projectId}/todos/${todoId}.json`);
+  return response.data;
+}
+
+export async function createTodo(
+  client: AxiosInstance,
+  projectId: string,
+  todolistId: string,
+  body: TodoCreateBody,
+): Promise<Todo> {
+  const response = await client.post(
+    `/buckets/${projectId}/todolists/${todolistId}/todos.json`,
+    body,
+  );
+  return response.data;
+}
+
+export async function updateTodo(
+  client: AxiosInstance,
+  projectId: string,
+  todoId: string,
+  patch: TodoUpdateBody,
+): Promise<Todo> {
+  return applyUpdate<Todo, TodoUpdateBody>(
+    'full',
+    patch,
+    () => getTodo(client, projectId, todoId),
+    async (body) => {
+      const response = await client.put(
+        `/buckets/${projectId}/todos/${todoId}.json`,
+        body,
+      );
+      return response.data;
+    },
+    TODO_UPDATE_WHITELIST,
+  );
+}
+
+export async function completeTodo(
+  client: AxiosInstance,
+  projectId: string,
+  todoId: string,
+): Promise<void> {
+  await client.post(`/buckets/${projectId}/todos/${todoId}/completion.json`);
+}
+
+export async function uncompleteTodo(
+  client: AxiosInstance,
+  projectId: string,
+  todoId: string,
+): Promise<void> {
+  await client.delete(`/buckets/${projectId}/todos/${todoId}/completion.json`);
+}
+
+export async function repositionTodo(
+  client: AxiosInstance,
+  projectId: string,
+  todoId: string,
+  position: number,
+  parentId?: string,
+): Promise<void> {
+  const body: { position: number; parent_id?: string } = { position };
+  if (parentId !== undefined) body.parent_id = parentId;
+  await client.put(`/buckets/${projectId}/todos/${todoId}/position.json`, body);
+}
+```
+
+- [ ] **Step 4: Add the delegation methods on `BasecampClient`**
+
+Append to the `BasecampClient` class in `src/lib/basecamp-client.ts` (after the existing `getTodo` method — there's already one at line 161; the new delegation can replace its body, or remove the old one and let the delegation be the only definition. Use the delegation as the canonical version):
+
+```ts
+import * as todosResource from './resources/todos.js';
+import type { TodoCreateBody, TodoUpdateBody } from '../types/basecamp.js';
+```
+
+Add these methods on the class (the `getTodo` already exists — replace its body with the delegation; the rest are new):
+
+```ts
+async getTodo(projectId: string, todoId: string): Promise<Todo> {
+  return todosResource.getTodo(this.client, projectId, todoId);
+}
+
+async createTodo(
+  projectId: string,
+  todolistId: string,
+  body: TodoCreateBody,
+): Promise<Todo> {
+  return todosResource.createTodo(this.client, projectId, todolistId, body);
+}
+
+async updateTodo(
+  projectId: string,
+  todoId: string,
+  patch: TodoUpdateBody,
+): Promise<Todo> {
+  return todosResource.updateTodo(this.client, projectId, todoId, patch);
+}
+
+async completeTodo(projectId: string, todoId: string): Promise<void> {
+  return todosResource.completeTodo(this.client, projectId, todoId);
+}
+
+async uncompleteTodo(projectId: string, todoId: string): Promise<void> {
+  return todosResource.uncompleteTodo(this.client, projectId, todoId);
+}
+
+async repositionTodo(
+  projectId: string,
+  todoId: string,
+  position: number,
+  parentId?: string,
+): Promise<void> {
+  return todosResource.repositionTodo(this.client, projectId, todoId, position, parentId);
+}
+```
+
+**SIGNATURE CHANGE — must update existing callers in the same task.** The existing `getTodo` at line 161-164 takes only `(todoId)` and uses the `/todos/{id}.json` flat route. The new delegation takes `(projectId, todoId)` and uses the bucket-scoped route. There must be exactly **one** `getTodo` method on the class after this step — delete the old method body completely and let the delegation be the only definition.
+
+Find every existing caller and update it before running tests:
+
+```bash
+grep -rn "\.getTodo(" src/ | grep -v test/resources/todos.test.ts
+```
+
+Known caller: `src/test/basecamp-client.test.ts` around line 281 calls `client.getTodo('789')` and asserts the URL `/todos/789.json`. Update that test to use the new signature and bucket-scoped URL:
+
+```ts
+// Before:
+mockAxiosInstance.get.mockResolvedValue({ data: mockTodo });
+const result = await client.getTodo('789');
+expect(mockAxiosInstance.get).toHaveBeenCalledWith('/todos/789.json');
+
+// After:
+mockAxiosInstance.get.mockResolvedValue({ data: mockTodo });
+const result = await client.getTodo('123', '789');
+expect(mockAxiosInstance.get).toHaveBeenCalledWith('/buckets/123/todos/789.json');
+```
+
+The MCP tool layer in Chunk 3 will use the new signature, so we don't need to update production callers there.
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `npx vitest run src/test/resources/todos.test.ts`
+Expected: PASS — all 8 tests green.
+
+- [ ] **Step 6: Run the full suite (regression check)**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/lib/resources/todos.ts src/test/resources/todos.test.ts src/lib/basecamp-client.ts
+git commit -m "feat(resources): add todos write methods (create/update/complete/reposition)"
+```
+
+---
+
+### Task 2a.2: Resource module — `src/lib/resources/todolists.ts`
+
+Three methods: `getTodolist`, `createTodolist`, `updateTodolist`. Update uses `'full'` strategy.
+
+**Files:**
+- Create: `src/lib/resources/todolists.ts`
+- Create: `src/test/resources/todolists.test.ts`
+- Modify: `src/lib/basecamp-client.ts` (add 3 delegations)
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/resources/todolists.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { getTodolist, createTodolist, updateTodolist } from '../../lib/resources/todolists.js';
+import type { AxiosInstance } from 'axios';
+
+function makeMockClient() {
+  return { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() } as unknown as AxiosInstance & {
+    get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn>;
+  };
+}
+
+describe('todolists resource', () => {
+  describe('getTodolist', () => {
+    it('GETs /buckets/{p}/todolists/{id}.json', async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({ data: { id: '50', name: 'My list' } });
+      const result = await getTodolist(client, '100', '50');
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/todolists/50.json');
+      expect(result.name).toBe('My list');
+    });
+  });
+
+  describe('createTodolist', () => {
+    it('POSTs body to /buckets/{p}/todosets/{ts}/todolists.json', async () => {
+      const client = makeMockClient();
+      client.post.mockResolvedValue({ data: { id: '50', name: 'New' } });
+      await createTodolist(client, '100', '5', { name: 'New', description: '<em>go</em>' });
+      expect(client.post).toHaveBeenCalledWith(
+        '/buckets/100/todosets/5/todolists.json',
+        { name: 'New', description: '<em>go</em>' },
+      );
+    });
+  });
+
+  describe('updateTodolist', () => {
+    it("uses 'full' strategy: GET then PUT with whitelisted union", async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({
+        data: { id: '50', name: 'old', description: 'desc' },
+      });
+      client.put.mockResolvedValue({ data: { id: '50', name: 'new', description: 'desc' } });
+
+      await updateTodolist(client, '100', '50', { name: 'new' });
+
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/todolists/50.json');
+      expect(client.put).toHaveBeenCalledWith(
+        '/buckets/100/todolists/50.json',
+        { name: 'new', description: 'desc' },
+      );
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/resources/todolists.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/lib/resources/todolists.ts`:
+
+```ts
+import type { AxiosInstance } from 'axios';
+import { applyUpdate } from '../update-merge.js';
+import type {
+  TodoList,
+  TodolistCreateBody,
+  TodolistUpdateBody,
+} from '../../types/basecamp.js';
+
+const TODOLIST_UPDATE_WHITELIST = [
+  'name',
+  'description',
+] as const satisfies ReadonlyArray<keyof TodolistUpdateBody & keyof TodoList>;
+
+export async function getTodolist(
+  client: AxiosInstance,
+  projectId: string,
+  todolistId: string,
+): Promise<TodoList> {
+  const response = await client.get(`/buckets/${projectId}/todolists/${todolistId}.json`);
+  return response.data;
+}
+
+export async function createTodolist(
+  client: AxiosInstance,
+  projectId: string,
+  todosetId: string,
+  body: TodolistCreateBody,
+): Promise<TodoList> {
+  const response = await client.post(
+    `/buckets/${projectId}/todosets/${todosetId}/todolists.json`,
+    body,
+  );
+  return response.data;
+}
+
+export async function updateTodolist(
+  client: AxiosInstance,
+  projectId: string,
+  todolistId: string,
+  patch: TodolistUpdateBody,
+): Promise<TodoList> {
+  return applyUpdate<TodoList, TodolistUpdateBody>(
+    'full',
+    patch,
+    () => getTodolist(client, projectId, todolistId),
+    async (body) => {
+      const response = await client.put(
+        `/buckets/${projectId}/todolists/${todolistId}.json`,
+        body,
+      );
+      return response.data;
+    },
+    TODOLIST_UPDATE_WHITELIST,
+  );
+}
+```
+
+- [ ] **Step 4: Add the delegation methods**
+
+In `src/lib/basecamp-client.ts`, add the import:
+
+```ts
+import * as todolistsResource from './resources/todolists.js';
+import type { TodolistCreateBody, TodolistUpdateBody } from '../types/basecamp.js';
+```
+
+Then add to the class (after the existing `getTodoLists` method around line 143):
+
+```ts
+async getTodolist(projectId: string, todolistId: string): Promise<TodoList> {
+  return todolistsResource.getTodolist(this.client, projectId, todolistId);
+}
+
+async createTodolist(
+  projectId: string,
+  todosetId: string,
+  body: TodolistCreateBody,
+): Promise<TodoList> {
+  return todolistsResource.createTodolist(this.client, projectId, todosetId, body);
+}
+
+async updateTodolist(
+  projectId: string,
+  todolistId: string,
+  patch: TodolistUpdateBody,
+): Promise<TodoList> {
+  return todolistsResource.updateTodolist(this.client, projectId, todolistId, patch);
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `npx vitest run src/test/resources/todolists.test.ts`
+Expected: PASS — 3 tests green.
+
+- [ ] **Step 6: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/lib/resources/todolists.ts src/test/resources/todolists.test.ts src/lib/basecamp-client.ts
+git commit -m "feat(resources): add todolists create/update/get methods"
+```
+
+---
+
+### Task 2a.3: Resource module — `src/lib/resources/comments.ts`
+
+Three methods: `getComment`, `createComment`, `updateComment`. Update uses `'partial'` strategy (single-field whitelist; no merge needed).
+
+**Files:**
+- Create: `src/lib/resources/comments.ts`
+- Create: `src/test/resources/comments.test.ts`
+- Modify: `src/lib/basecamp-client.ts` (add 3 delegations)
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/resources/comments.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { getComment, createComment, updateComment } from '../../lib/resources/comments.js';
+import type { AxiosInstance } from 'axios';
+
+function makeMockClient() {
+  return { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() } as unknown as AxiosInstance & {
+    get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn>;
+  };
+}
+
+describe('comments resource', () => {
+  describe('getComment', () => {
+    it('GETs /buckets/{p}/comments/{id}.json', async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({ data: { id: '7', content: 'hi' } });
+      const result = await getComment(client, '100', '7');
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/comments/7.json');
+      expect(result.content).toBe('hi');
+    });
+  });
+
+  describe('createComment', () => {
+    it('POSTs body to /buckets/{p}/recordings/{r}/comments.json', async () => {
+      const client = makeMockClient();
+      client.post.mockResolvedValue({ data: { id: '7', content: 'hello' } });
+      await createComment(client, '100', '500', { content: '<div>hello</div>' });
+      expect(client.post).toHaveBeenCalledWith(
+        '/buckets/100/recordings/500/comments.json',
+        { content: '<div>hello</div>' },
+      );
+    });
+  });
+
+  describe('updateComment', () => {
+    it("uses 'partial' strategy: PUTs only the patch and never GETs first", async () => {
+      const client = makeMockClient();
+      client.put.mockResolvedValue({ data: { id: '7', content: 'updated' } });
+      await updateComment(client, '100', '7', { content: 'updated' });
+      expect(client.get).not.toHaveBeenCalled();
+      expect(client.put).toHaveBeenCalledWith(
+        '/buckets/100/comments/7.json',
+        { content: 'updated' },
+      );
+    });
+
+    it('short-circuits to a no-op-style get when patch is empty (defensive)', async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({ data: { id: '7', content: 'unchanged' } });
+      const result = await updateComment(client, '100', '7', {});
+      expect(client.put).not.toHaveBeenCalled();
+      expect(result.content).toBe('unchanged');
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/resources/comments.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/lib/resources/comments.ts`:
+
+```ts
+import type { AxiosInstance } from 'axios';
+import { applyUpdate } from '../update-merge.js';
+import type {
+  Comment,
+  CommentCreateBody,
+  CommentUpdateBody,
+} from '../../types/basecamp.js';
+
+const COMMENT_UPDATE_WHITELIST = [
+  'content',
+] as const satisfies ReadonlyArray<keyof CommentUpdateBody & keyof Comment>;
+
+export async function getComment(
+  client: AxiosInstance,
+  projectId: string,
+  commentId: string,
+): Promise<Comment> {
+  const response = await client.get(`/buckets/${projectId}/comments/${commentId}.json`);
+  return response.data;
+}
+
+export async function createComment(
+  client: AxiosInstance,
+  projectId: string,
+  recordingId: string,
+  body: CommentCreateBody,
+): Promise<Comment> {
+  const response = await client.post(
+    `/buckets/${projectId}/recordings/${recordingId}/comments.json`,
+    body,
+  );
+  return response.data;
+}
+
+export async function updateComment(
+  client: AxiosInstance,
+  projectId: string,
+  commentId: string,
+  patch: CommentUpdateBody,
+): Promise<Comment> {
+  return applyUpdate<Comment, CommentUpdateBody>(
+    'partial',
+    patch,
+    () => getComment(client, projectId, commentId),
+    async (body) => {
+      const response = await client.put(
+        `/buckets/${projectId}/comments/${commentId}.json`,
+        body,
+      );
+      return response.data;
+    },
+    COMMENT_UPDATE_WHITELIST,
+  );
+}
+```
+
+- [ ] **Step 4: Add the delegation methods**
+
+In `src/lib/basecamp-client.ts`, add the import:
+
+```ts
+import * as commentsResource from './resources/comments.js';
+import type { CommentCreateBody, CommentUpdateBody } from '../types/basecamp.js';
+```
+
+Then add to the class (after the existing `getComments` method around line 475):
+
+```ts
+async getComment(projectId: string, commentId: string): Promise<Comment> {
+  return commentsResource.getComment(this.client, projectId, commentId);
+}
+
+async createComment(
+  projectId: string,
+  recordingId: string,
+  body: CommentCreateBody,
+): Promise<Comment> {
+  return commentsResource.createComment(this.client, projectId, recordingId, body);
+}
+
+async updateComment(
+  projectId: string,
+  commentId: string,
+  patch: CommentUpdateBody,
+): Promise<Comment> {
+  return commentsResource.updateComment(this.client, projectId, commentId, patch);
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `npx vitest run src/test/resources/comments.test.ts`
+Expected: PASS — 4 tests green.
+
+- [ ] **Step 6: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/lib/resources/comments.ts src/test/resources/comments.test.ts src/lib/basecamp-client.ts
+git commit -m "feat(resources): add comments create/update/get methods"
+```
+
+---
+
+### Task 2a.4: Verify Chunk 2a
+
+- [ ] **Step 1: Run the full test suite**
+
+Run: `npm test`
+Expected: PASS — every test green, including the 15 new tests added in Chunk 2a (8 todos + 3 todolists + 4 comments).
+
+- [ ] **Step 2: Run the build**
+
+Run: `npm run build`
+Expected: No type errors. The `as const satisfies ReadonlyArray<keyof TBody & keyof TResource>` constraint must compile against the body types added in Chunk 1 Task 1.2.
+
+- [ ] **Step 3: Confirm `basecamp-client.ts` size after Chunk 2a**
+
+Run: `wc -l src/lib/basecamp-client.ts`
+Expected: under 700 lines. (Started at 591 before Chunk 1; Chunk 1 added the `getCardTableWithDetails` method and import; Chunk 2a adds 12 delegation methods and 3 imports — should land around 670.)
+
+- [ ] **Step 4: Confirm git history**
+
+Run: `git log --oneline -3`
+Expected: three new commits from Chunk 2a (todos / todolists / comments), conventional-commit form.
+
+End of Chunk 2a.
+
+---
+
+## Chunk 2b: Resource modules — messages, schedule, recording-status
+
+This chunk completes the resource layer with the three remaining modules. Same TDD pattern; messages and schedule both reuse the `getDockEntryWithDetails` helper from Chunk 1.
+
+### Task 2b.1: Resource module — `src/lib/resources/messages.ts`
+
+Five methods: `getMessageBoard`, `getMessages`, `getMessage`, `createMessage`, `updateMessage`. `getMessageBoard` uses the dock helper from Chunk 1. `createMessage` always sends `status: 'active'`. Update uses `'full'` strategy.
+
+**Files:**
+- Create: `src/lib/resources/messages.ts`
+- Create: `src/test/resources/messages.test.ts`
+- Modify: `src/lib/basecamp-client.ts` (add 5 delegations)
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/resources/messages.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import {
+  getMessageBoard,
+  getMessages,
+  getMessage,
+  createMessage,
+  updateMessage,
+} from '../../lib/resources/messages.js';
+import type { AxiosInstance } from 'axios';
+
+function makeMockClient() {
+  return { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() } as unknown as AxiosInstance & {
+    get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn>;
+  };
+}
+
+describe('messages resource', () => {
+  describe('getMessageBoard', () => {
+    it('uses the dock helper to fetch the board details', async () => {
+      const client = makeMockClient();
+      client.get
+        .mockResolvedValueOnce({
+          data: { id: '100', dock: [{ id: '999', name: 'message_board', enabled: true }] },
+        })
+        .mockResolvedValueOnce({
+          data: { id: '999', title: 'Board' },
+        });
+
+      const result = await getMessageBoard(client, '100');
+      expect(client.get).toHaveBeenNthCalledWith(1, '/projects/100.json');
+      expect(client.get).toHaveBeenNthCalledWith(2, '/buckets/100/message_boards/999.json');
+      expect(result).toEqual({ id: '999', title: 'Board' });
+    });
+  });
+
+  describe('getMessages', () => {
+    it('GETs /buckets/{p}/message_boards/{mb}/messages.json', async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({ data: [{ id: '1' }] });
+      const result = await getMessages(client, '100', '999');
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/message_boards/999/messages.json');
+      expect(result).toEqual([{ id: '1' }]);
+    });
+  });
+
+  describe('getMessage', () => {
+    it('GETs /buckets/{p}/messages/{id}.json', async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({ data: { id: '1' } });
+      await getMessage(client, '100', '1');
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/messages/1.json');
+    });
+  });
+
+  describe('createMessage', () => {
+    it("POSTs the body with status: 'active' always set", async () => {
+      const client = makeMockClient();
+      client.post.mockResolvedValue({ data: { id: '1', subject: 'Hi' } });
+      await createMessage(client, '100', '999', { subject: 'Hi', content: '<div>x</div>' });
+      expect(client.post).toHaveBeenCalledWith(
+        '/buckets/100/message_boards/999/messages.json',
+        { subject: 'Hi', content: '<div>x</div>', status: 'active' },
+      );
+    });
+
+    it('forwards optional category_id and subscriptions', async () => {
+      const client = makeMockClient();
+      client.post.mockResolvedValue({ data: { id: '1', subject: 'X' } });
+      await createMessage(client, '100', '999', {
+        subject: 'X',
+        category_id: 7,
+        subscriptions: [10, 20],
+      });
+      const sent = client.post.mock.calls[0][1];
+      expect(sent.category_id).toBe(7);
+      expect(sent.subscriptions).toEqual([10, 20]);
+      expect(sent.status).toBe('active');
+    });
+  });
+
+  describe('updateMessage', () => {
+    it("uses 'full' strategy: GET then PUT whitelisted union", async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({
+        data: { id: '1', subject: 'old', content: 'old c', category_id: 3 },
+      });
+      client.put.mockResolvedValue({ data: { id: '1', subject: 'new' } });
+
+      await updateMessage(client, '100', '1', { subject: 'new' });
+
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/messages/1.json');
+      expect(client.put).toHaveBeenCalledWith(
+        '/buckets/100/messages/1.json',
+        { subject: 'new', content: 'old c', category_id: 3 },
+      );
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/resources/messages.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/lib/resources/messages.ts`:
+
+```ts
+import type { AxiosInstance } from 'axios';
+import { applyUpdate } from '../update-merge.js';
+import { getDockEntryWithDetails } from './dock.js';
+import type {
+  Message,
+  MessageBoard,
+  MessageCreateBody,
+  MessageUpdateBody,
+  CreateMessageInput,
+} from '../../types/basecamp.js';
+
+const MESSAGE_UPDATE_WHITELIST = [
+  'subject',
+  'content',
+  'category_id',
+] as const satisfies ReadonlyArray<keyof MessageUpdateBody & keyof Message>;
+
+export async function getMessageBoard(
+  client: AxiosInstance,
+  projectId: string,
+): Promise<MessageBoard> {
+  return getDockEntryWithDetails<MessageBoard>(
+    client,
+    projectId,
+    'message_board',
+    (p, id) => `/buckets/${p}/message_boards/${id}.json`,
+  );
+}
+
+export async function getMessages(
+  client: AxiosInstance,
+  projectId: string,
+  messageBoardId: string,
+): Promise<Message[]> {
+  const response = await client.get(
+    `/buckets/${projectId}/message_boards/${messageBoardId}/messages.json`,
+  );
+  return response.data;
+}
+
+export async function getMessage(
+  client: AxiosInstance,
+  projectId: string,
+  messageId: string,
+): Promise<Message> {
+  const response = await client.get(`/buckets/${projectId}/messages/${messageId}.json`);
+  return response.data;
+}
+
+export async function createMessage(
+  client: AxiosInstance,
+  projectId: string,
+  messageBoardId: string,
+  input: CreateMessageInput,
+): Promise<Message> {
+  const body: MessageCreateBody = { ...input, status: 'active' };
+  const response = await client.post(
+    `/buckets/${projectId}/message_boards/${messageBoardId}/messages.json`,
+    body,
+  );
+  return response.data;
+}
+
+export async function updateMessage(
+  client: AxiosInstance,
+  projectId: string,
+  messageId: string,
+  patch: MessageUpdateBody,
+): Promise<Message> {
+  return applyUpdate<Message, MessageUpdateBody>(
+    'full',
+    patch,
+    () => getMessage(client, projectId, messageId),
+    async (body) => {
+      const response = await client.put(
+        `/buckets/${projectId}/messages/${messageId}.json`,
+        body,
+      );
+      return response.data;
+    },
+    MESSAGE_UPDATE_WHITELIST,
+  );
+}
+```
+
+- [ ] **Step 4: Add the delegation methods**
+
+In `src/lib/basecamp-client.ts`, add the import:
+
+```ts
+import * as messagesResource from './resources/messages.js';
+import type { CreateMessageInput, MessageUpdateBody } from '../types/basecamp.js';
+```
+
+Then add to the class (logical place: after the existing `Communication methods` block around line 469):
+
+```ts
+async getMessageBoard(projectId: string): Promise<MessageBoard> {
+  return messagesResource.getMessageBoard(this.client, projectId);
+}
+
+async getMessages(projectId: string, messageBoardId: string): Promise<Message[]> {
+  return messagesResource.getMessages(this.client, projectId, messageBoardId);
+}
+
+async getMessage(projectId: string, messageId: string): Promise<Message> {
+  return messagesResource.getMessage(this.client, projectId, messageId);
+}
+
+async createMessage(
+  projectId: string,
+  messageBoardId: string,
+  input: CreateMessageInput,
+): Promise<Message> {
+  return messagesResource.createMessage(this.client, projectId, messageBoardId, input);
+}
+
+async updateMessage(
+  projectId: string,
+  messageId: string,
+  patch: MessageUpdateBody,
+): Promise<Message> {
+  return messagesResource.updateMessage(this.client, projectId, messageId, patch);
+}
+```
+
+You will also need `MessageBoard` in the imported types at the top of `basecamp-client.ts`. Add it to the existing type-import block.
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `npx vitest run src/test/resources/messages.test.ts`
+Expected: PASS — 6 tests green.
+
+- [ ] **Step 6: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/lib/resources/messages.ts src/test/resources/messages.test.ts src/lib/basecamp-client.ts
+git commit -m "feat(resources): add messages get/create/update + message-board lookup"
+```
+
+---
+
+### Task 2b.2: Resource module — `src/lib/resources/schedule.ts`
+
+Five methods: `getSchedule`, `getScheduleEntries`, `getScheduleEntry`, `createScheduleEntry`, `updateScheduleEntry`. `getSchedule` uses the dock helper. Update uses `'full'`.
+
+**Files:**
+- Create: `src/lib/resources/schedule.ts`
+- Create: `src/test/resources/schedule.test.ts`
+- Modify: `src/lib/basecamp-client.ts` (add 5 delegations)
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/resources/schedule.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import {
+  getSchedule,
+  getScheduleEntries,
+  getScheduleEntry,
+  createScheduleEntry,
+  updateScheduleEntry,
+} from '../../lib/resources/schedule.js';
+import type { AxiosInstance } from 'axios';
+
+function makeMockClient() {
+  return { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() } as unknown as AxiosInstance & {
+    get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn>;
+  };
+}
+
+describe('schedule resource', () => {
+  describe('getSchedule', () => {
+    it('uses the dock helper to fetch schedule details', async () => {
+      const client = makeMockClient();
+      client.get
+        .mockResolvedValueOnce({
+          data: { id: '100', dock: [{ id: '888', name: 'schedule', enabled: true }] },
+        })
+        .mockResolvedValueOnce({ data: { id: '888', title: 'Schedule' } });
+
+      const result = await getSchedule(client, '100');
+      expect(client.get).toHaveBeenNthCalledWith(1, '/projects/100.json');
+      expect(client.get).toHaveBeenNthCalledWith(2, '/buckets/100/schedules/888.json');
+      expect(result).toEqual({ id: '888', title: 'Schedule' });
+    });
+  });
+
+  describe('getScheduleEntries', () => {
+    it('GETs /buckets/{p}/schedules/{s}/entries.json', async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({ data: [{ id: '1' }] });
+      await getScheduleEntries(client, '100', '888');
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/schedules/888/entries.json');
+    });
+  });
+
+  describe('getScheduleEntry', () => {
+    it('GETs /buckets/{p}/schedule_entries/{id}.json', async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({ data: { id: '7' } });
+      await getScheduleEntry(client, '100', '7');
+      expect(client.get).toHaveBeenCalledWith('/buckets/100/schedule_entries/7.json');
+    });
+  });
+
+  describe('createScheduleEntry', () => {
+    it('POSTs body to /buckets/{p}/schedules/{s}/entries.json', async () => {
+      const client = makeMockClient();
+      client.post.mockResolvedValue({ data: { id: '7', summary: 'Lunch' } });
+      await createScheduleEntry(client, '100', '888', {
+        summary: 'Lunch',
+        starts_at: '2026-06-01T12:00:00Z',
+        ends_at: '2026-06-01T13:00:00Z',
+        all_day: false,
+      });
+      expect(client.post).toHaveBeenCalledWith(
+        '/buckets/100/schedules/888/entries.json',
+        {
+          summary: 'Lunch',
+          starts_at: '2026-06-01T12:00:00Z',
+          ends_at: '2026-06-01T13:00:00Z',
+          all_day: false,
+        },
+      );
+    });
+  });
+
+  describe('updateScheduleEntry', () => {
+    it("uses 'full' strategy: GET then PUT whitelisted union", async () => {
+      const client = makeMockClient();
+      client.get.mockResolvedValue({
+        data: {
+          id: '7',
+          summary: 'old',
+          description: 'd',
+          starts_at: '2026-06-01T12:00:00Z',
+          ends_at: '2026-06-01T13:00:00Z',
+          all_day: false,
+          notify: false,
+          participant_ids: [10],
+        },
+      });
+      client.put.mockResolvedValue({ data: { id: '7' } });
+
+      await updateScheduleEntry(client, '100', '7', { summary: 'new' });
+
+      expect(client.put).toHaveBeenCalledWith(
+        '/buckets/100/schedule_entries/7.json',
+        {
+          summary: 'new',
+          description: 'd',
+          starts_at: '2026-06-01T12:00:00Z',
+          ends_at: '2026-06-01T13:00:00Z',
+          participant_ids: [10],
+          all_day: false,
+          notify: false,
+        },
+      );
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/resources/schedule.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/lib/resources/schedule.ts`:
+
+```ts
+import type { AxiosInstance } from 'axios';
+import { applyUpdate } from '../update-merge.js';
+import { getDockEntryWithDetails } from './dock.js';
+import type {
+  Schedule,
+  ScheduleEntry,
+  ScheduleEntryCreateBody,
+  ScheduleEntryUpdateBody,
+} from '../../types/basecamp.js';
+
+const SCHEDULE_ENTRY_UPDATE_WHITELIST = [
+  'summary',
+  'description',
+  'starts_at',
+  'ends_at',
+  'participant_ids',
+  'all_day',
+  'notify',
+] as const satisfies ReadonlyArray<keyof ScheduleEntryUpdateBody & keyof ScheduleEntry>;
+
+export async function getSchedule(
+  client: AxiosInstance,
+  projectId: string,
+): Promise<Schedule> {
+  return getDockEntryWithDetails<Schedule>(
+    client,
+    projectId,
+    'schedule',
+    (p, id) => `/buckets/${p}/schedules/${id}.json`,
+  );
+}
+
+export async function getScheduleEntries(
+  client: AxiosInstance,
+  projectId: string,
+  scheduleId: string,
+): Promise<ScheduleEntry[]> {
+  const response = await client.get(
+    `/buckets/${projectId}/schedules/${scheduleId}/entries.json`,
+  );
+  return response.data;
+}
+
+export async function getScheduleEntry(
+  client: AxiosInstance,
+  projectId: string,
+  entryId: string,
+): Promise<ScheduleEntry> {
+  const response = await client.get(`/buckets/${projectId}/schedule_entries/${entryId}.json`);
+  return response.data;
+}
+
+export async function createScheduleEntry(
+  client: AxiosInstance,
+  projectId: string,
+  scheduleId: string,
+  body: ScheduleEntryCreateBody,
+): Promise<ScheduleEntry> {
+  const response = await client.post(
+    `/buckets/${projectId}/schedules/${scheduleId}/entries.json`,
+    body,
+  );
+  return response.data;
+}
+
+export async function updateScheduleEntry(
+  client: AxiosInstance,
+  projectId: string,
+  entryId: string,
+  patch: ScheduleEntryUpdateBody,
+): Promise<ScheduleEntry> {
+  return applyUpdate<ScheduleEntry, ScheduleEntryUpdateBody>(
+    'full',
+    patch,
+    () => getScheduleEntry(client, projectId, entryId),
+    async (body) => {
+      const response = await client.put(
+        `/buckets/${projectId}/schedule_entries/${entryId}.json`,
+        body,
+      );
+      return response.data;
+    },
+    SCHEDULE_ENTRY_UPDATE_WHITELIST,
+  );
+}
+```
+
+- [ ] **Step 4: Add the delegation methods**
+
+In `src/lib/basecamp-client.ts`, add imports:
+
+```ts
+import * as scheduleResource from './resources/schedule.js';
+import type {
+  Schedule,
+  ScheduleEntry,
+  ScheduleEntryCreateBody,
+  ScheduleEntryUpdateBody,
+} from '../types/basecamp.js';
+```
+
+Then add to the class (after the messages block from Task 2.4):
+
+```ts
+async getSchedule(projectId: string): Promise<Schedule> {
+  return scheduleResource.getSchedule(this.client, projectId);
+}
+
+async getScheduleEntries(projectId: string, scheduleId: string): Promise<ScheduleEntry[]> {
+  return scheduleResource.getScheduleEntries(this.client, projectId, scheduleId);
+}
+
+async getScheduleEntry(projectId: string, entryId: string): Promise<ScheduleEntry> {
+  return scheduleResource.getScheduleEntry(this.client, projectId, entryId);
+}
+
+async createScheduleEntry(
+  projectId: string,
+  scheduleId: string,
+  body: ScheduleEntryCreateBody,
+): Promise<ScheduleEntry> {
+  return scheduleResource.createScheduleEntry(this.client, projectId, scheduleId, body);
+}
+
+async updateScheduleEntry(
+  projectId: string,
+  entryId: string,
+  patch: ScheduleEntryUpdateBody,
+): Promise<ScheduleEntry> {
+  return scheduleResource.updateScheduleEntry(this.client, projectId, entryId, patch);
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `npx vitest run src/test/resources/schedule.test.ts`
+Expected: PASS — 5 tests green.
+
+- [ ] **Step 6: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/lib/resources/schedule.ts src/test/resources/schedule.test.ts src/lib/basecamp-client.ts
+git commit -m "feat(resources): add schedule + schedule_entry get/create/update"
+```
+
+---
+
+### Task 2b.3: Resource module — `src/lib/resources/recording-status.ts`
+
+Single method: `setRecordingStatus`. PUTs to the generic recordings endpoint. The five `set_*_status` MCP tools all delegate here.
+
+**Files:**
+- Create: `src/lib/resources/recording-status.ts`
+- Create: `src/test/resources/recording-status.test.ts`
+- Modify: `src/lib/basecamp-client.ts` (add 1 delegation)
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/resources/recording-status.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { setRecordingStatus } from '../../lib/resources/recording-status.js';
+import type { AxiosInstance } from 'axios';
+
+function makeMockClient() {
+  return { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() } as unknown as AxiosInstance & {
+    put: ReturnType<typeof vi.fn>;
+  };
+}
+
+describe('setRecordingStatus', () => {
+  it('PUTs /buckets/{p}/recordings/{id}/status/trashed.json for status=trashed', async () => {
+    const client = makeMockClient();
+    client.put.mockResolvedValue({ data: undefined });
+    await setRecordingStatus(client, '100', '7', 'trashed');
+    expect(client.put).toHaveBeenCalledWith('/buckets/100/recordings/7/status/trashed.json');
+  });
+
+  it('PUTs status/archived.json for status=archived', async () => {
+    const client = makeMockClient();
+    client.put.mockResolvedValue({ data: undefined });
+    await setRecordingStatus(client, '100', '7', 'archived');
+    expect(client.put).toHaveBeenCalledWith('/buckets/100/recordings/7/status/archived.json');
+  });
+
+  it('PUTs status/active.json for status=active (unarchive)', async () => {
+    const client = makeMockClient();
+    client.put.mockResolvedValue({ data: undefined });
+    await setRecordingStatus(client, '100', '7', 'active');
+    expect(client.put).toHaveBeenCalledWith('/buckets/100/recordings/7/status/active.json');
+  });
+
+  it('is idempotent: a second call with the same status sends the same PUT', async () => {
+    const client = makeMockClient();
+    client.put.mockResolvedValue({ data: undefined });
+    await setRecordingStatus(client, '100', '7', 'trashed');
+    await setRecordingStatus(client, '100', '7', 'trashed');
+    expect(client.put).toHaveBeenCalledTimes(2);
+    expect(client.put).toHaveBeenNthCalledWith(1, '/buckets/100/recordings/7/status/trashed.json');
+    expect(client.put).toHaveBeenNthCalledWith(2, '/buckets/100/recordings/7/status/trashed.json');
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/resources/recording-status.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/lib/resources/recording-status.ts`:
+
+```ts
+import type { AxiosInstance } from 'axios';
+import type { RecordingStatus } from '../../types/basecamp.js';
+
+export async function setRecordingStatus(
+  client: AxiosInstance,
+  projectId: string,
+  recordingId: string,
+  status: RecordingStatus,
+): Promise<void> {
+  await client.put(`/buckets/${projectId}/recordings/${recordingId}/status/${status}.json`);
+}
+```
+
+- [ ] **Step 4: Add the delegation method**
+
+In `src/lib/basecamp-client.ts`, add the import:
+
+```ts
+import * as recordingStatusResource from './resources/recording-status.js';
+import type { RecordingStatus } from '../types/basecamp.js';
+```
+
+Then add to the class (anywhere in the body — logical place is at the end before the closing brace):
+
+```ts
+async setRecordingStatus(
+  projectId: string,
+  recordingId: string,
+  status: RecordingStatus,
+): Promise<void> {
+  return recordingStatusResource.setRecordingStatus(this.client, projectId, recordingId, status);
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `npx vitest run src/test/resources/recording-status.test.ts`
+Expected: PASS — 4 tests green.
+
+- [ ] **Step 6: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/lib/resources/recording-status.ts src/test/resources/recording-status.test.ts src/lib/basecamp-client.ts
+git commit -m "feat(resources): add setRecordingStatus (drives all set_*_status tools)"
+```
+
+---
+
+### Task 2b.4: Verify Chunk 2b
+
+- [ ] **Step 1: Run the full test suite**
+
+Run: `npm test`
+Expected: PASS — every test green, including the 15 new tests added in Chunk 2b (6 messages + 5 schedule + 4 recording-status), on top of the 15 from Chunk 2a.
+
+- [ ] **Step 2: Run the build**
+
+Run: `npm run build`
+Expected: No type errors. Confirm no `as TResource` casts in any of the resource files (only the single `existing as unknown as TBody` inside `update-merge.ts` is allowed).
+
+- [ ] **Step 3: Confirm `basecamp-client.ts` size**
+
+Run: `wc -l src/lib/basecamp-client.ts`
+Expected: under 800 lines. The file started at 591 before any of this work; Chunk 1 added ~10 lines (one method + import), Chunk 2a added ~80 lines (12 delegations + 3 imports), Chunk 2b adds ~90 lines (11 delegations + 4 imports) — should land around 770. If it crosses 800, split `BasecampClient` into a primary class plus a mixin per resource group as a follow-up before Chunk 3.
+
+- [ ] **Step 4: Confirm git history**
+
+Run: `git log --oneline -3`
+Expected: three new commits from Chunk 2b (messages / schedule / recording-status), conventional-commit form.
+
+End of Chunk 2b.
