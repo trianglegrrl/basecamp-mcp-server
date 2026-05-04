@@ -50,17 +50,17 @@ All tool names use snake_case to match the existing convention. All tools take `
 
 | Tool | Maps to |
 |---|---|
-| `get_message_board(project_id)` | Resolves `message_board` entry from `/projects/{project_id}.json` dock |
+| `get_message_board(project_id)` | Resolves `message_board` entry from `/projects/{project_id}.json` dock, then fetches full details via `GET /buckets/{project_id}/message_boards/{message_board_id}.json` (mirrors the existing `get_card_table` two-step pattern). |
 | `get_messages(project_id, message_board_id)` | `GET /buckets/{project_id}/message_boards/{message_board_id}/messages.json` |
 | `get_message(project_id, message_id)` | `GET /buckets/{project_id}/messages/{message_id}.json` |
-| `create_message(project_id, message_board_id, subject, content?, category_id?, subscriptions?, status?)` | `POST /buckets/{project_id}/message_boards/{message_board_id}/messages.json` (default `status: 'active'`) |
+| `create_message(project_id, message_board_id, subject, content?, category_id?, subscriptions?)` | `POST /buckets/{project_id}/message_boards/{message_board_id}/messages.json`. Always sends `status: 'active'` — drafts have no use case from an LLM caller, so the parameter is not exposed. |
 | `update_message(project_id, message_id, subject?, content?, category_id?)` | `PUT /buckets/{project_id}/messages/{message_id}.json` (fetch-then-merge) |
 
 ### 2.5 Schedule entries (5 tools)
 
 | Tool | Maps to |
 |---|---|
-| `get_schedule(project_id)` | Resolves `schedule` entry from `/projects/{project_id}.json` dock |
+| `get_schedule(project_id)` | Resolves `schedule` entry from `/projects/{project_id}.json` dock, then fetches full details via `GET /buckets/{project_id}/schedules/{schedule_id}.json` (mirrors `get_card_table`). |
 | `get_schedule_entries(project_id, schedule_id)` | `GET /buckets/{project_id}/schedules/{schedule_id}/entries.json` |
 | `get_schedule_entry(project_id, entry_id)` | `GET /buckets/{project_id}/schedule_entries/{entry_id}.json` |
 | `create_schedule_entry(project_id, schedule_id, summary, starts_at, ends_at, description?, participant_ids?, all_day?, notify?)` | `POST /buckets/{project_id}/schedules/{schedule_id}/entries.json` |
@@ -111,7 +111,36 @@ src/lib/
   update-merge.ts           # the fetch-then-merge helper
 ```
 
-Each `resources/*.ts` file exports plain functions with a uniform signature: `(client: AxiosInstance, ...args) => Promise<T>`. `BasecampClient` keeps its current public method shape and delegates to the resource functions. Existing methods (cards, projects, my-assignments, etc.) stay where they are; we don't refactor them in this round.
+Each `resources/*.ts` file exports plain functions with a uniform signature: `(client: AxiosInstance, ...args) => Promise<T>`. `BasecampClient` keeps its current public method shape and delegates to the resource functions. Existing methods (cards, projects, my-assignments, comments, documents, etc.) stay where they are in `basecamp-client.ts`; we don't move them in this round to keep the diff bounded.
+
+**Facade pattern** — the new methods on `BasecampClient` are one-line delegations:
+
+```ts
+// src/lib/resources/todos.ts
+export async function createTodo(
+  client: AxiosInstance,
+  projectId: string,
+  todolistId: string,
+  body: CreateTodoBody,
+): Promise<Todo> {
+  const response = await client.post(
+    `/buckets/${projectId}/todolists/${todolistId}/todos.json`,
+    body,
+  );
+  return response.data;
+}
+
+// src/lib/basecamp-client.ts
+import * as todos from './resources/todos.js';
+
+export class BasecampClient {
+  // ...existing methods unchanged...
+
+  createTodo(projectId: string, todolistId: string, body: CreateTodoBody) {
+    return todos.createTodo(this.client, projectId, todolistId, body);
+  }
+}
+```
 
 **Why functions, not classes?** Each resource module has no state of its own — just HTTP calls against the shared axios instance. Free functions are easier to test in isolation (no fixture setup beyond a mock axios instance) and easier to read.
 
@@ -143,7 +172,15 @@ export async function mergeUpdate<T extends object>(
 }
 ```
 
-`whitelist` is the set of fields BC3 accepts on PUT for that resource (e.g., `['content', 'description', 'assignee_ids', 'completion_subscriber_ids', 'due_on', 'starts_on', 'notify']` for todos). The whitelist prevents read-only fields (`id`, `created_at`, `creator`, `bucket`, etc.) from leaking into the PUT body.
+`whitelist` is the set of fields BC3 accepts on PUT for that resource. The whitelist prevents read-only fields (`id`, `created_at`, `creator`, `bucket`, etc.) from leaking into the PUT body. The five whitelists for this round, derived from the BC3 docs:
+
+| Resource | PUT whitelist |
+|---|---|
+| Todo | `content`, `description`, `assignee_ids`, `completion_subscriber_ids`, `due_on`, `starts_on`, `notify` |
+| Todolist | `name`, `description` |
+| Comment | `content` |
+| Message | `subject`, `content`, `category_id` |
+| Schedule entry | `summary`, `description`, `starts_at`, `ends_at`, `participant_ids`, `all_day`, `notify` |
 
 `null` is **not** treated as "clear the field" in this round. If a future use case needs explicit clearing, we can add a sentinel; for now `null` and `undefined` both mean "leave alone".
 
@@ -197,7 +234,7 @@ A separate vitest config (`vitest.live.config.ts`) excluded from the default `np
 2. **Project-name guard.** At startup, fetches the test project via `GET /projects/{id}.json` and asserts its name contains a sentinel string. Default sentinel is `MCP_TEST_SANDBOX`; overrideable via `BASECAMP_TEST_PROJECT_NAME_GUARD`. If the guard string is absent, the suite refuses to write *anything* and exits with a clear message.
 3. **Title prefix on every artifact.** Every created todo / todolist / message / comment / schedule entry gets a `[mcp-test-{run-id}]` prefix in its title or content, where `run-id` is a per-run UUID. Trashed at end-of-run.
 4. **Captured-IDs-only teardown.** Teardown trashes only IDs that the test suite itself created. No "list everything in the project and trash it" pattern.
-5. **Leak audit at end of run.** After teardown, the suite walks `/projects/recordings.json?bucket={test_project_id}` and warns if any active item with the test prefix is still present. (Should never fire — defense in depth.)
+5. **Leak audit at end of run.** After teardown, the suite iterates `/projects/recordings.json?bucket={test_project_id}&type={t}` for each `t` in `['Todo', 'Todolist', 'Message', 'Comment', 'Schedule::Entry']` and warns if any active item with the test prefix is still present. (Should never fire — defense in depth.)
 
 **Per-resource lifecycle test:**
 ```
@@ -239,3 +276,4 @@ The mock suite alone proves nothing about the real BC3 API; the live suite alone
 - `npm test` (mocks-only) passes in CI.
 - No existing test regresses.
 - No file in `src/` exceeds 800 lines.
+- `npm run build` (which runs `tsc`) passes with no type errors.
