@@ -643,4 +643,71 @@ export const tools: Tool[] = [
       required: ['project_id', 'comment_id'],
     },
   },
+
+  // Recording-status tools (set_*_status)
+  {
+    name: 'set_todo_status',
+    description: 'Set the status of a todo to active, archived, or trashed. Idempotent — safe to call repeatedly.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todo_id:    { type: 'string', description: 'The todo ID' },
+        status:     { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+      },
+      required: ['project_id', 'todo_id', 'status'],
+    },
+  },
+  {
+    name: 'set_todolist_status',
+    description: 'Set the status of a todo list to active, archived, or trashed. Idempotent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id:   { type: 'string', description: 'The project ID' },
+        todolist_id:  { type: 'string', description: 'The todo list ID' },
+        status:       { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+      },
+      required: ['project_id', 'todolist_id', 'status'],
+    },
+  },
+  {
+    name: 'set_message_status',
+    description: 'Set the status of a message to active, archived, or trashed. Idempotent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        message_id: { type: 'string', description: 'The message ID' },
+        status:     { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+      },
+      required: ['project_id', 'message_id', 'status'],
+    },
+  },
+  {
+    name: 'set_comment_status',
+    description: 'Set the status of a comment to active, archived, or trashed. Idempotent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        comment_id: { type: 'string', description: 'The comment ID' },
+        status:     { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+      },
+      required: ['project_id', 'comment_id', 'status'],
+    },
+  },
+  {
+    name: 'set_schedule_entry_status',
+    description: 'Set the status of a schedule entry to active, archived, or trashed. Idempotent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        entry_id:   { type: 'string', description: 'The schedule entry ID' },
+        status:     { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+      },
+      required: ['project_id', 'entry_id', 'status'],
+    },
+  },
 ];
