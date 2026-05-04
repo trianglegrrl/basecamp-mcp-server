@@ -603,4 +603,44 @@ export const tools: Tool[] = [
       required: ['project_id', 'todolist_id'],
     },
   },
+
+  // Comment write tools
+  {
+    name: 'get_comment',
+    description: 'Get a single comment by ID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        comment_id: { type: 'string', description: 'The comment ID' },
+      },
+      required: ['project_id', 'comment_id'],
+    },
+  },
+  {
+    name: 'create_comment',
+    description: 'Post a comment on a Basecamp recording (todo, message, document, card, etc.)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        recording_id: { type: 'string', description: 'The recording (target item) ID — todo, message, document, card, etc.' },
+        content: { type: 'string', description: 'Comment body — HTML allowed (see BC3 rich-text guide)' },
+      },
+      required: ['project_id', 'recording_id', 'content'],
+    },
+  },
+  {
+    name: 'update_comment',
+    description: 'Update the content of an existing comment. Partial PUT — single field; no merge needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        comment_id: { type: 'string', description: 'The comment ID' },
+        content: { type: 'string', description: 'New comment body (HTML)' },
+      },
+      required: ['project_id', 'comment_id'],
+    },
+  },
 ];
