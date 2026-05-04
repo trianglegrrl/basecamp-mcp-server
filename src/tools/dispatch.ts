@@ -10,6 +10,7 @@ import { handlers as todolists } from './handlers/todolists.js';
 import { handlers as comments } from './handlers/comments.js';
 import { handlers as recordingStatus } from './handlers/recording-status.js';
 import { handlers as messages } from './handlers/messages.js';
+import { handlers as schedule } from './handlers/schedule.js';
 
 type Handler = (args: Record<string, any>, client: BasecampClient) => Promise<MCPToolResultEnvelope>;
 
@@ -24,6 +25,7 @@ const ALL_HANDLERS: Record<string, Handler> = {
   ...comments,
   ...recordingStatus,
   ...messages,
+  ...schedule,
 };
 
 export async function dispatch(

@@ -778,4 +778,79 @@ export const tools: Tool[] = [
       required: ['project_id', 'message_id'],
     },
   },
+
+  // Schedule write tools
+  {
+    name: 'get_schedule',
+    description: 'Get the schedule for a project (each project has exactly one)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'get_schedule_entries',
+    description: 'List schedule entries on a schedule',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id:  { type: 'string', description: 'The project ID' },
+        schedule_id: { type: 'string', description: 'The schedule ID (see get_schedule)' },
+      },
+      required: ['project_id', 'schedule_id'],
+    },
+  },
+  {
+    name: 'get_schedule_entry',
+    description: 'Get a single schedule entry by ID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        entry_id:   { type: 'string', description: 'The schedule entry ID' },
+      },
+      required: ['project_id', 'entry_id'],
+    },
+  },
+  {
+    name: 'create_schedule_entry',
+    description: 'Create a new schedule entry on a schedule',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id:      { type: 'string', description: 'The project ID' },
+        schedule_id:     { type: 'string', description: 'The schedule ID (see get_schedule)' },
+        summary:         { type: 'string', description: 'Entry summary/title (required)' },
+        starts_at:       { type: 'string', description: 'ISO 8601 start datetime (required) — for all-day events use YYYY-MM-DD' },
+        ends_at:         { type: 'string', description: 'ISO 8601 end datetime (required) — for all-day events use YYYY-MM-DD' },
+        description:     { type: 'string', description: 'Optional rich-text description (HTML)' },
+        participant_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Optional array of person IDs to invite' },
+        all_day:         { type: 'boolean', description: 'Whether this is an all-day event' },
+        notify:          { type: 'boolean', description: 'Whether to notify participants' },
+      },
+      required: ['project_id', 'schedule_id', 'summary', 'starts_at', 'ends_at'],
+    },
+  },
+  {
+    name: 'update_schedule_entry',
+    description: 'Update fields on an existing schedule entry. Omitted fields are preserved (fetch-then-merge).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id:      { type: 'string', description: 'The project ID' },
+        entry_id:        { type: 'string', description: 'The schedule entry ID' },
+        summary:         { type: 'string' },
+        description:     { type: 'string' },
+        starts_at:       { type: 'string' },
+        ends_at:         { type: 'string' },
+        participant_ids: { type: 'array', items: { type: ['string', 'number'] } },
+        all_day:         { type: 'boolean' },
+        notify:          { type: 'boolean' },
+      },
+      required: ['project_id', 'entry_id'],
+    },
+  },
 ];
