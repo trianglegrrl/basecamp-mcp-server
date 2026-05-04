@@ -13,6 +13,7 @@ import type {
   Document,
   Upload,
   Webhook,
+  MessageBoard,
   DailyCheckIn,
   QuestionAnswer,
   OAuthTokens,
@@ -27,12 +28,15 @@ import type {
   TodolistUpdateBody,
   CommentCreateBody,
   CommentUpdateBody,
+  CreateMessageInput,
+  MessageUpdateBody,
 } from '../types/basecamp.js';
 import { parseNextLink } from './pagination.js';
 import { getDockEntryWithDetails } from './resources/dock.js';
 import * as todosResource from './resources/todos.js';
 import * as todolistsResource from './resources/todolists.js';
 import * as commentsResource from './resources/comments.js';
+import * as messagesResource from './resources/messages.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -561,6 +565,34 @@ export class BasecampClient {
     patch: CommentUpdateBody,
   ): Promise<Comment> {
     return commentsResource.updateComment(this.client, projectId, commentId, patch);
+  }
+
+  async getMessageBoard(projectId: string): Promise<MessageBoard> {
+    return messagesResource.getMessageBoard(this.client, projectId);
+  }
+
+  async getMessages(projectId: string, messageBoardId: string): Promise<Message[]> {
+    return messagesResource.getMessages(this.client, projectId, messageBoardId);
+  }
+
+  async getMessage(projectId: string, messageId: string): Promise<Message> {
+    return messagesResource.getMessage(this.client, projectId, messageId);
+  }
+
+  async createMessage(
+    projectId: string,
+    messageBoardId: string,
+    input: CreateMessageInput,
+  ): Promise<Message> {
+    return messagesResource.createMessage(this.client, projectId, messageBoardId, input);
+  }
+
+  async updateMessage(
+    projectId: string,
+    messageId: string,
+    patch: MessageUpdateBody,
+  ): Promise<Message> {
+    return messagesResource.updateMessage(this.client, projectId, messageId, patch);
   }
 
   // Document methods
