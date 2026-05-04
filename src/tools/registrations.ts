@@ -710,4 +710,72 @@ export const tools: Tool[] = [
       required: ['project_id', 'entry_id', 'status'],
     },
   },
+
+  // Message write tools
+  {
+    name: 'get_message_board',
+    description: 'Get the message board for a project (each project has exactly one)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'get_messages',
+    description: 'List messages on a message board',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id:       { type: 'string', description: 'The project ID' },
+        message_board_id: { type: 'string', description: 'The message board ID (see get_message_board)' },
+      },
+      required: ['project_id', 'message_board_id'],
+    },
+  },
+  {
+    name: 'get_message',
+    description: 'Get a single message by ID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        message_id: { type: 'string', description: 'The message ID' },
+      },
+      required: ['project_id', 'message_id'],
+    },
+  },
+  {
+    name: 'create_message',
+    description: 'Post a new message to a message board. Always published immediately (no draft state exposed).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id:       { type: 'string', description: 'The project ID' },
+        message_board_id: { type: 'string', description: 'The message board ID (see get_message_board)' },
+        subject:          { type: 'string', description: 'Message title (required)' },
+        content:          { type: 'string', description: 'Optional message body — HTML allowed' },
+        category_id:      { type: ['string', 'number'], description: 'Optional message-type ID (see message_types endpoint)' },
+        subscriptions:    { type: 'array', items: { type: ['string', 'number'] }, description: 'Optional array of person IDs to notify and subscribe; default = all project members' },
+      },
+      required: ['project_id', 'message_board_id', 'subject'],
+    },
+  },
+  {
+    name: 'update_message',
+    description: 'Update fields on an existing message. Omitted fields are preserved (fetch-then-merge).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id:  { type: 'string', description: 'The project ID' },
+        message_id:  { type: 'string', description: 'The message ID' },
+        subject:     { type: 'string', description: 'New subject' },
+        content:     { type: 'string', description: 'New body (HTML)' },
+        category_id: { type: ['string', 'number'], description: 'New category ID' },
+      },
+      required: ['project_id', 'message_id'],
+    },
+  },
 ];
