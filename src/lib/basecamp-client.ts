@@ -23,6 +23,7 @@ import type {
   MyAssignmentsResponse,
 } from '../types/basecamp.js';
 import { parseNextLink } from './pagination.js';
+import { getDockEntryWithDetails } from './resources/dock.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -287,6 +288,15 @@ export class BasecampClient {
       }
       throw error;
     }
+  }
+
+  async getCardTableWithDetails(projectId: string): Promise<CardTable> {
+    return getDockEntryWithDetails<CardTable>(
+      this.client,
+      projectId,
+      'card_table',
+      (p, id) => `/buckets/${p}/card_tables/${id}.json`,
+    );
   }
 
   // Column methods
