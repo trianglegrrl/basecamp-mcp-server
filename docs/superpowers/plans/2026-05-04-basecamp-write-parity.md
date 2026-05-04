@@ -2311,3 +2311,606 @@ Run: `git log --oneline -3`
 Expected: three new commits from Chunk 2b (messages / schedule / recording-status), conventional-commit form.
 
 End of Chunk 2b.
+
+---
+
+## Chunk 3a: Tool-layer scaffolding + existing-handler migration + wire-up fixes
+
+This chunk dismantles the 50-case switch in `src/index.ts` and reorganises tool handlers into `src/tools/handlers/*.ts`, one file per resource group. It also fixes the 11 advertised-but-unhandled tools as part of the migration (those handlers go into the same per-resource files, not a separate "fixes" file). No new MCP tools yet — those land in Chunks 3b and 3c.
+
+**Hard dependency: Chunk 1 must land before this chunk.** Task 3a.3 references `getCardTableWithDetails`, which is added in Chunk 1 Task 1.5. Chunk 2a/2b are not required for 3a (they add resource methods that 3b/3c will wire up; existing methods migrated here in 3a are independent).
+
+**Note on orphan tools.** Two tools currently sit in the registrations array with no `BasecampClient` method and no switch case: `search_basecamp` and `global_search`. They have always returned `Unknown tool` when called. Implementing real search is outside the write-parity scope; rather than ship more vaporware behind a renamed module, this chunk **deletes** their registrations (Task 3a.2 Step 3). If anyone wants real search later, it's a clean greenfield design.
+
+### The shared patterns (read first)
+
+Every handler file in this chunk follows the same shape. Read this once; don't repeat it in your head per task.
+
+**Handler module shape (one per resource group):**
+
+```ts
+// src/tools/handlers/<resource>.ts
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+import type { MCPToolResult } from '../../types/basecamp.js';
+import { successResult, errorResult } from '../result.js';
+
+export async function handle<ToolName>(
+  args: Record<string, any>,
+  client: BasecampClient,
+): Promise<MCPToolResult> {
+  // 1. Pull the args you need from `args`. Trust MCP to have validated
+  //    the schema (required fields will be present).
+  // 2. Call one BasecampClient method.
+  // 3. Wrap the result via successResult({ ... }).
+  const data = await client.someMethod(args.project_id, ...);
+  return successResult({ some_key: data, count: data.length });
+}
+
+export const handlers = {
+  some_tool_name: handleSomeToolName,
+  another_tool: handleAnotherTool,
+} as const;
+```
+
+**Test file shape (one per handler module):**
+
+```ts
+// src/test/tools/handlers/<resource>.test.ts
+import { describe, it, expect, vi } from 'vitest';
+import { handlers } from '../../../tools/handlers/<resource>.js';
+import type { BasecampClient } from '../../../lib/basecamp-client.js';
+
+function makeMockClient(): BasecampClient {
+  return {
+    someMethod: vi.fn(),
+    // ... only the methods this handler module touches
+  } as unknown as BasecampClient;
+}
+
+describe('<resource> handlers', () => {
+  describe('<tool_name>', () => {
+    it('dispatches with the expected args + returns success', async () => {
+      const client = makeMockClient();
+      (client.someMethod as any).mockResolvedValue({ id: '1' });
+
+      const result = await handlers.<tool_name>({ project_id: '100', /* ... */ }, client);
+
+      expect(client.someMethod).toHaveBeenCalledWith('100', /* ... */);
+      const payload = JSON.parse(result.content[0].text);
+      expect(payload.status).toBe('success');
+    });
+  });
+});
+```
+
+**Result helper (created once, used by every handler):** see Task 3a.1.
+
+**Dispatch shape:** `dispatch.ts` is a single map merging every `handlers` export from `handlers/*.ts`. The lookup is `dispatch[name](args, client)`. Returning `undefined` → `Unknown tool` MCPError.
+
+**Registration shape:** `registrations.ts` is a single array literal of `{ name, description, inputSchema }` objects. Existing entries from `src/index.ts` move here verbatim (no schema changes in this chunk).
+
+---
+
+### Task 3a.1: Add the `MCPToolResult` helper module
+
+Tiny shared helper — every handler returns through this so the JSON envelope is consistent.
+
+**Files:**
+- Create: `src/tools/result.ts`
+- Create: `src/test/tools/result.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/tools/result.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { successResult, errorResult } from '../../tools/result.js';
+
+describe('successResult', () => {
+  it('wraps the payload as a JSON-encoded text content block', () => {
+    const result = successResult({ todo: { id: '1', content: 'x' } });
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe('text');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.status).toBe('success');
+    expect(parsed.todo).toEqual({ id: '1', content: 'x' });
+  });
+
+  it('always sets status: "success" even if the payload contains a status key', () => {
+    const result = successResult({ status: 'something-else', other: 1 });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.status).toBe('success');
+    expect(parsed.other).toBe(1);
+  });
+});
+
+describe('errorResult', () => {
+  it('wraps an error message as a JSON-encoded text content block', () => {
+    const result = errorResult('Something went wrong', { code: 'X' });
+    expect(result.content).toHaveLength(1);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.status).toBe('error');
+    expect(parsed.message).toBe('Something went wrong');
+    expect(parsed.code).toBe('X');
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/tools/result.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/tools/result.ts`:
+
+```ts
+export interface MCPToolResultEnvelope {
+  content: Array<{ type: 'text'; text: string }>;
+}
+
+export function successResult(payload: Record<string, unknown>): MCPToolResultEnvelope {
+  const body = { ...payload, status: 'success' };
+  return {
+    content: [{ type: 'text', text: JSON.stringify(body, null, 2) }],
+  };
+}
+
+export function errorResult(
+  message: string,
+  extra: Record<string, unknown> = {},
+): MCPToolResultEnvelope {
+  const body = { ...extra, status: 'error', message };
+  return {
+    content: [{ type: 'text', text: JSON.stringify(body, null, 2) }],
+  };
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run src/test/tools/result.test.ts`
+Expected: PASS — 3 tests green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/tools/result.ts src/test/tools/result.test.ts
+git commit -m "feat(tools): add successResult/errorResult JSON envelope helpers"
+```
+
+---
+
+### Task 3a.2: Stand up `src/tools/{registrations,dispatch}.ts` and the new `index.ts` shell
+
+This step moves the tool-list array and the dispatch logic out of `src/index.ts` into the new `src/tools/` files, but does *not* split the dispatch into per-resource handlers yet (that's Task 3a.3). After this step every existing tool still works; the `BasecampMCPServer` class just delegates to the new modules.
+
+**Files:**
+- Create: `src/tools/registrations.ts`
+- Create: `src/tools/dispatch.ts`
+- Create: `src/tools/index.ts`
+- Modify: `src/index.ts` (becomes a thin server-bootstrapping shell)
+- Create: `src/test/tools/dispatch.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/tools/dispatch.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { dispatch } from '../../tools/dispatch.js';
+
+describe('dispatch', () => {
+  it('routes a known tool name to the registered handler', async () => {
+    const client = { getProjects: vi.fn().mockResolvedValue([{ id: '1' }]) } as any;
+    const result = await dispatch('get_projects', {}, client);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.status).toBe('success');
+    expect(client.getProjects).toHaveBeenCalledOnce();
+  });
+
+  it('returns an error envelope for an unknown tool name', async () => {
+    const client = {} as any;
+    const result = await dispatch('does_not_exist', {}, client);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.status).toBe('error');
+    expect(parsed.message).toMatch(/Unknown tool: does_not_exist/);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/tools/dispatch.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Move `tools` array into `registrations.ts` AND drop two orphan tool registrations**
+
+The current `tools` array in `src/index.ts` advertises two tools — `search_basecamp` and `global_search` — that have **no `BasecampClient` method and no switch case**. They are vaporware: registering as available, returning `Unknown tool` when called. They are outside the write-parity scope and we are not going to invent search behaviour as a side effect of this refactor. Drop both registrations as part of the move.
+
+Create `src/tools/registrations.ts`. Copy the contents of the array literal from `src/index.ts` lines 110-602 (i.e. the lines *between* `tools: [` and `],`, exclusive of those two bracket lines), wrapped in an export. While copying, **omit the two `search_basecamp` and `global_search` registration objects** (they currently sit around lines 130-152 of `src/index.ts`).
+
+```ts
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+
+export const tools: Tool[] = [
+  // PASTE the existing entries here, MINUS search_basecamp and global_search.
+];
+```
+
+If `Tool` isn't exported by the SDK at that path, fall back to:
+
+```ts
+export const tools: Array<{
+  name: string;
+  description: string;
+  inputSchema: { type: 'object'; properties: Record<string, unknown>; required?: string[] };
+}> = [
+  // ... same array, same omissions
+];
+```
+
+This is a content-preserving move except for the two intentional omissions, which are documented in the commit message.
+
+- [ ] **Step 4: Move dispatch logic into `dispatch.ts`**
+
+Create `src/tools/dispatch.ts` with a single `dispatch` function that takes `(name, args, client)` and returns a `MCPToolResultEnvelope`. For now, this function contains exactly the same `switch (name) { ... }` block that currently sits inside the second `setRequestHandler` call in `src/index.ts` (the one matching `CallToolRequestSchema` — entire body of that callback, from the inner `switch (name) {` opener down to the matching closing brace), but rewritten to:
+
+1. Pull `client` from a parameter rather than calling `this.getBasecampClient()`.
+2. Wrap each case's return through `successResult(...)` (the JSON envelope helper from Task 3a.1) instead of inlining `JSON.stringify(...)` and the `content: [{type:'text', text: ...}]` wrapper.
+3. On `default`, return `errorResult(\`Unknown tool: ${name}\`)` instead of throwing `McpError`.
+4. On caught exceptions, return `errorResult(error.message ?? 'Unknown error')`.
+
+Sketch:
+
+```ts
+import type { BasecampClient } from '../lib/basecamp-client.js';
+import { successResult, errorResult, type MCPToolResultEnvelope } from './result.js';
+
+export async function dispatch(
+  name: string,
+  args: Record<string, any>,
+  client: BasecampClient,
+): Promise<MCPToolResultEnvelope> {
+  try {
+    switch (name) {
+      case 'get_projects': {
+        const projects = await client.getProjects();
+        return successResult({ projects, count: projects.length });
+      }
+      case 'get_project': {
+        const project = await client.getProject(args.project_id);
+        return successResult({ project });
+      }
+      // ... all existing cases, ported from src/index.ts ...
+      default:
+        return errorResult(`Unknown tool: ${name}`);
+    }
+  } catch (error: any) {
+    if (error.response?.status === 401 && error.response?.data?.error?.includes('expired')) {
+      return errorResult('Your Basecamp OAuth token has expired. Please re-authenticate: npm run auth', {
+        error: 'OAuth token expired',
+      });
+    }
+    return errorResult(error.message ?? 'Unknown error', { error: 'Execution error' });
+  }
+}
+```
+
+- [ ] **Step 5: Add the `src/tools/index.ts` re-export**
+
+Create `src/tools/index.ts`:
+
+```ts
+export { tools } from './registrations.js';
+export { dispatch } from './dispatch.js';
+```
+
+- [ ] **Step 6: Reduce `src/index.ts` to a bootstrapping shell**
+
+Open `src/index.ts`. Delete the entire body of `setupHandlers` (the array + the call-tool switch). Replace it with:
+
+```ts
+private setupHandlers(): void {
+  this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const { tools } = await import('./tools/index.js');
+    return { tools };
+  });
+
+  this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const client = await this.getBasecampClient();
+    const { dispatch } = await import('./tools/index.js');
+    return dispatch(request.params.name, (request.params.arguments ?? {}) as Record<string, any>, client);
+  });
+}
+```
+
+The `handleError` helper that lived on the class can stay as private (it's redundant with the dispatch's catch but unused calls don't break anything). Or delete it — your call. Either way, `src/index.ts` should drop from ~1047 lines to under 200.
+
+- [ ] **Step 7: Run the full test suite**
+
+Run: `npm test`
+Expected: PASS — every existing tool dispatches identically. The two new dispatch tests pass.
+
+- [ ] **Step 8: Run the build**
+
+Run: `npm run build`
+Expected: No type errors.
+
+- [ ] **Step 9: Confirm `src/index.ts` shrunk**
+
+Run: `wc -l src/index.ts`
+Expected: under 200 lines.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add src/tools/ src/index.ts src/test/tools/dispatch.test.ts
+git commit -m "refactor(tools): move tool registrations + dispatch out of src/index.ts"
+```
+
+---
+
+### Task 3a.3: Split `dispatch.ts` into per-resource handler modules + fix the 11 wire-up bugs
+
+This step extracts the giant switch in `dispatch.ts` (created in Task 3a.2) into 5 per-resource handler files under `src/tools/handlers/`. The 11 advertised-but-unhandled tools (which currently fall through to `Unknown tool` because their cases were missing) get their cases written for the first time in the appropriate handler file as part of the migration.
+
+**Migration table — every existing or about-to-exist case maps to one of these handler files:**
+
+| Handler file | Tools handled |
+|---|---|
+| `handlers/cards.ts` | `get_cards`, `create_card`, **`get_card`**, **`update_card`**, `move_card`, `complete_card`, `get_card_steps`, `create_card_step`, `complete_card_step` |
+| `handlers/columns.ts` | `get_card_table`, `get_columns`, `create_column`, **`update_column`**, **`move_column`**, **`update_column_color`** |
+| `handlers/documents.ts` | `get_documents`, `create_document`, **`update_document`**, **`trash_document`**, **`get_uploads`** |
+| `handlers/webhooks.ts` | **`get_webhooks`**, **`create_webhook`**, **`delete_webhook`** |
+| `handlers/misc.ts` | `get_projects`, `get_project`, `get_todolists`, `get_todos`, `get_my_profile`, `get_my_assignments`, `get_my_due_assignments`, `get_my_completed_assignments`, `get_people`, `get_project_people`, `get_assignments_for_person`, `get_campfire_lines`, `get_comments`, `get_daily_check_ins`, `get_question_answers` |
+
+**Bold names = the 11 wire-up bug fixes.** Their `BasecampClient` methods already exist (verified in Chunk 1's reading); we just write the handler bodies and add them to the dispatch.
+
+**Files:**
+- Create: `src/tools/handlers/cards.ts`
+- Create: `src/tools/handlers/columns.ts`
+- Create: `src/tools/handlers/documents.ts`
+- Create: `src/tools/handlers/webhooks.ts`
+- Create: `src/tools/handlers/misc.ts`
+- Create: `src/test/tools/handlers/{cards,columns,documents,webhooks,misc}.test.ts`
+- Modify: `src/tools/dispatch.ts` (replace the big switch with a lookup map)
+
+- [ ] **Step 1: Write the failing tests**
+
+For each of the 5 handler test files, write at least one test per tool covering the dispatch + return-shape pattern. Example for `src/test/tools/handlers/cards.test.ts` (template — apply identically for every tool in the migration table):
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { handlers } from '../../../tools/handlers/cards.js';
+import type { BasecampClient } from '../../../lib/basecamp-client.js';
+
+function makeMockClient(overrides: Partial<BasecampClient> = {}): BasecampClient {
+  return {
+    getCards: vi.fn(),
+    createCard: vi.fn(),
+    getCard: vi.fn(),
+    updateCard: vi.fn(),
+    moveCard: vi.fn(),
+    completeCard: vi.fn(),
+    getCardSteps: vi.fn(),
+    createCardStep: vi.fn(),
+    completeCardStep: vi.fn(),
+    ...overrides,
+  } as unknown as BasecampClient;
+}
+
+describe('cards handlers', () => {
+  it('get_cards: forwards (project_id, column_id) and returns count', async () => {
+    const client = makeMockClient();
+    (client.getCards as any).mockResolvedValue([{ id: '1' }, { id: '2' }]);
+    const result = await handlers.get_cards({ project_id: '100', column_id: '5' }, client);
+    expect(client.getCards).toHaveBeenCalledWith('100', '5');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.cards).toHaveLength(2);
+    expect(parsed.count).toBe(2);
+  });
+
+  // ...one test per tool for the rest of the file:
+  // create_card, get_card, update_card, move_card, complete_card,
+  // get_card_steps, create_card_step, complete_card_step.
+  // Each: mock the client method, dispatch through handlers.<tool_name>,
+  // assert URL params + success envelope.
+});
+```
+
+For each of the 11 wire-up fixes, the test asserts the new handler exists and dispatches correctly — these tests would have failed before this step because the case never existed.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npx vitest run src/test/tools/handlers/`
+Expected: FAIL — modules not found.
+
+- [ ] **Step 3: Implement each handler module**
+
+For each handler file, the body is mechanical — pull args, call the matching `BasecampClient` method, wrap in `successResult`. Use the existing case bodies in `src/tools/dispatch.ts` (created in Task 3a.2) as the source of truth for argument shapes; copy them into per-handler functions.
+
+Example shape (full file, for `handlers/cards.ts`):
+
+```ts
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+import type { MCPToolResultEnvelope } from '../result.js';
+import { successResult } from '../result.js';
+
+async function getCards(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const cards = await c.getCards(args.project_id, args.column_id);
+  return successResult({ cards, count: cards.length });
+}
+
+async function createCard(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const card = await c.createCard(
+    args.project_id, args.column_id, args.title, args.content, args.due_on, args.notify ?? false,
+  );
+  return successResult({ card, message: `Card '${args.title}' created successfully` });
+}
+
+async function getCard(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const card = await c.getCard(args.project_id, args.card_id);
+  return successResult({ card });
+}
+
+async function updateCard(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const card = await c.updateCard(
+    args.project_id, args.card_id, args.title, args.content, args.due_on, args.assignee_ids,
+  );
+  return successResult({ card, message: `Card updated` });
+}
+
+// ... move_card, complete_card, get_card_steps, create_card_step, complete_card_step ...
+
+export const handlers = {
+  get_cards: getCards,
+  create_card: createCard,
+  get_card: getCard,
+  update_card: updateCard,
+  move_card: moveCard,
+  complete_card: completeCard,
+  get_card_steps: getCardSteps,
+  create_card_step: createCardStep,
+  complete_card_step: completeCardStep,
+} as const;
+```
+
+Apply the same pattern for `columns.ts`, `documents.ts`, `webhooks.ts`, `misc.ts`. The argument shapes are visible in the existing tool registrations (in `src/tools/registrations.ts` from Task 3a.2) and the existing case bodies (in `src/tools/dispatch.ts` from Task 3a.2). Pay particular attention to the 11 wire-up fixes — those have no existing case bodies; consult the matching `BasecampClient` method signature directly.
+
+For the `get_card_table` handler in `columns.ts`, replace the existing two-call sequence (`getCardTable` + `getCardTableDetails`) with a single call to the new `getCardTableWithDetails` method added in Chunk 1 Task 1.5:
+
+```ts
+async function getCardTable(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const card_table = await c.getCardTableWithDetails(args.project_id);
+  return successResult({ card_table });
+}
+```
+
+**Worked example for `move_column` — argument-ordering trap.** The `BasecampClient.moveColumn` signature is `moveColumn(projectId, columnId, position, cardTableId)` — `cardTableId` is the **fourth** parameter, not the second. The MCP tool registration takes `(project_id, card_table_id, column_id, position)`. Do not assume positional alignment; map by name:
+
+```ts
+async function moveColumn(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  await c.moveColumn(args.project_id, args.column_id, args.position, args.card_table_id);
+  return successResult({ message: `Column moved to position ${args.position}` });
+}
+```
+
+When in doubt for any wire-up fix, look up the method signature in `src/lib/basecamp-client.ts` and map by argument name; positional ordering inside the method is not always the same as positional ordering of the MCP tool's input schema.
+
+**Soft cap on `misc.ts`.** It will hold ~15 tools. Average handler is ~12 lines, so total ~180 lines — under the 400-line soft cap. If during implementation it crosses **250 lines** (e.g., because `get_assignments_for_person` and `get_my_due_assignments` carry larger arg-shaping bodies than expected), split it into `misc/{projects,people,assignments,checkins}.ts` and re-export the merged `handlers` from `misc/index.ts`. This is a precautionary instruction, not a blocking one.
+
+- [ ] **Step 4: Replace the dispatch switch with the merged map**
+
+Open `src/tools/dispatch.ts`. Delete the entire `switch` body. Replace `dispatch` with a lookup-based version:
+
+```ts
+import type { BasecampClient } from '../lib/basecamp-client.js';
+import { errorResult, type MCPToolResultEnvelope } from './result.js';
+import { handlers as cards } from './handlers/cards.js';
+import { handlers as columns } from './handlers/columns.js';
+import { handlers as documents } from './handlers/documents.js';
+import { handlers as webhooks } from './handlers/webhooks.js';
+import { handlers as misc } from './handlers/misc.js';
+
+type Handler = (args: Record<string, any>, client: BasecampClient) => Promise<MCPToolResultEnvelope>;
+
+const ALL_HANDLERS: Record<string, Handler> = {
+  ...cards,
+  ...columns,
+  ...documents,
+  ...webhooks,
+  ...misc,
+};
+
+export async function dispatch(
+  name: string,
+  args: Record<string, any>,
+  client: BasecampClient,
+): Promise<MCPToolResultEnvelope> {
+  const handler = ALL_HANDLERS[name];
+  if (!handler) return errorResult(`Unknown tool: ${name}`);
+  try {
+    return await handler(args, client);
+  } catch (error: any) {
+    if (error.response?.status === 401 && error.response?.data?.error?.includes('expired')) {
+      return errorResult('Your Basecamp OAuth token has expired. Please re-authenticate: npm run auth', {
+        error: 'OAuth token expired',
+      });
+    }
+    if (error.response?.status === 422) {
+      return errorResult(error.response?.data?.error ?? error.message, {
+        error: 'Validation error',
+        status: 422,
+      });
+    }
+    return errorResult(error.message ?? 'Unknown error', { error: 'Execution error' });
+  }
+}
+```
+
+Note the new 422 case — surfaces BC3 validation errors verbatim (per spec §4).
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `npm test`
+Expected: PASS — every existing tool still dispatches; the 11 newly-wired tools now resolve via `handlers.<name>` lookup.
+
+- [ ] **Step 6: Run the build**
+
+Run: `npm run build`
+Expected: No type errors.
+
+- [ ] **Step 7: Spot-check a wire-up fix manually**
+
+Earlier this tool would fail. Now it should succeed (against a real account) — but as a smoke test we can verify dispatch routing without the real network call:
+
+```bash
+node -e "
+const { dispatch } = require('./dist/tools/dispatch.js');
+const fakeClient = { getWebhooks: async () => [{ id: 'w1' }] };
+dispatch('get_webhooks', { project_id: '1' }, fakeClient).then(r => console.log(r.content[0].text));
+"
+```
+
+Expected output: a JSON envelope with `status: 'success'` and `webhooks: [{ id: 'w1' }]`.
+
+- [ ] **Step 8: Confirm dispatch.ts size**
+
+Run: `wc -l src/tools/dispatch.ts`
+Expected: under 80 lines (was effectively the entire switch; now a 5-line lookup map plus the catch helper).
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add src/tools/handlers/ src/tools/dispatch.ts src/test/tools/handlers/
+git commit -m "refactor(tools): split dispatch into per-resource handlers + wire 11 missing tools"
+```
+
+---
+
+### Task 3a.4: Verify Chunk 3a
+
+- [ ] **Step 1: Run the full test suite**
+
+Run: `npm test`
+Expected: PASS — every test green. New test count for Chunk 3a: 3 result + 2 dispatch + ≥30 handler-dispatch tests (11 wire-up fixes + ~25 existing tools across 5 files) = 35+ new tests.
+
+- [ ] **Step 2: Run the build**
+
+Run: `npm run build`
+Expected: No type errors.
+
+- [ ] **Step 3: Confirm file sizes**
+
+Run: `wc -l src/index.ts src/tools/*.ts src/tools/handlers/*.ts`
+Expected: Every file under the 400-line soft cap; `src/index.ts` under 200; total handler files reasonable in size (each ~80-200 lines).
+
+- [ ] **Step 4: Confirm no advertised tool returns `Unknown tool`**
+
+Run: `grep -E "name: '[a-z_]+'" src/tools/registrations.ts | sed -E "s/.*name: '([a-z_]+)'.*/\1/" | sort -u`
+Cross-reference each line against the merged keys of `ALL_HANDLERS` in `src/tools/dispatch.ts` (every `handlers/*.ts` export). The two sets must match exactly. A registered tool with no handler entry will silently return `Unknown tool`; a handler entry with no registration is dead code.
+
+End of Chunk 3a.
