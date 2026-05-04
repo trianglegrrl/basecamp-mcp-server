@@ -116,3 +116,6 @@ config.local.*
 
 # oh-my-claudecode runtime state
 .omc/
+
+# Live-test captured IDs (per-run; cleaned by test:live:cleanup)
+.test-live-ids-*.json

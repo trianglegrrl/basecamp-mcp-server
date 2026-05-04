@@ -16,6 +16,8 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "test:coverage-ui": "vitest --ui --coverage",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "test:live:cleanup": "tsx src/scripts/test-live-cleanup.ts",
     "setup": "tsx src/scripts/setup.ts",
     "auth": "tsx src/scripts/oauth-app.ts",
     "smoke": "node scripts/smoke.mjs",
