@@ -21,9 +21,12 @@ import type {
   Assignment,
   AssignmentScope,
   MyAssignmentsResponse,
+  TodoCreateBody,
+  TodoUpdateBody,
 } from '../types/basecamp.js';
 import { parseNextLink } from './pagination.js';
 import { getDockEntryWithDetails } from './resources/dock.js';
+import * as todosResource from './resources/todos.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -154,9 +157,41 @@ export class BasecampClient {
     return response.data;
   }
 
-  async getTodo(todoId: string): Promise<Todo> {
-    const response = await this.client.get(`/todos/${todoId}.json`);
-    return response.data;
+  async getTodo(projectId: string, todoId: string): Promise<Todo> {
+    return todosResource.getTodo(this.client, projectId, todoId);
+  }
+
+  async createTodo(
+    projectId: string,
+    todolistId: string,
+    body: TodoCreateBody,
+  ): Promise<Todo> {
+    return todosResource.createTodo(this.client, projectId, todolistId, body);
+  }
+
+  async updateTodo(
+    projectId: string,
+    todoId: string,
+    patch: TodoUpdateBody,
+  ): Promise<Todo> {
+    return todosResource.updateTodo(this.client, projectId, todoId, patch);
+  }
+
+  async completeTodo(projectId: string, todoId: string): Promise<void> {
+    return todosResource.completeTodo(this.client, projectId, todoId);
+  }
+
+  async uncompleteTodo(projectId: string, todoId: string): Promise<void> {
+    return todosResource.uncompleteTodo(this.client, projectId, todoId);
+  }
+
+  async repositionTodo(
+    projectId: string,
+    todoId: string,
+    position: number,
+    parentId?: string,
+  ): Promise<void> {
+    return todosResource.repositionTodo(this.client, projectId, todoId, position, parentId);
   }
 
   // My / assignments / people methods

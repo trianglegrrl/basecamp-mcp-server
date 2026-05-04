@@ -278,10 +278,10 @@ describe('BasecampClient', () => {
     it('should get specific todo', async () => {
       mockAxiosInstance.get.mockResolvedValue({ data: mockTodo });
 
-      const todo = await client.getTodo('789');
+      const todo = await client.getTodo('123', '789');
 
       expect(todo).toEqual(mockTodo);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/todos/789.json');
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/buckets/123/todos/789.json');
     });
   });
 
