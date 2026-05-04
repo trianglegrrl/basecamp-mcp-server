@@ -471,4 +471,94 @@ export const tools: Tool[] = [
       required: ['project_id', 'question_id'],
     },
   },
+
+  // Todo write tools
+  {
+    name: 'get_todo',
+    description: 'Get a single todo by ID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todo_id: { type: 'string', description: 'The todo ID' },
+      },
+      required: ['project_id', 'todo_id'],
+    },
+  },
+  {
+    name: 'create_todo',
+    description: 'Create a new todo in a todo list',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todolist_id: { type: 'string', description: 'The todo list ID' },
+        content: { type: 'string', description: 'The todo content/title (required)' },
+        description: { type: 'string', description: 'Optional rich-text description (HTML)' },
+        assignee_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Optional array of person IDs to assign' },
+        completion_subscriber_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Optional array of person IDs to notify on completion' },
+        due_on: { type: 'string', description: 'Optional due date (YYYY-MM-DD)' },
+        starts_on: { type: 'string', description: 'Optional start date (YYYY-MM-DD)' },
+        notify: { type: 'boolean', description: 'Whether to notify assignees (default false)' },
+      },
+      required: ['project_id', 'todolist_id', 'content'],
+    },
+  },
+  {
+    name: 'update_todo',
+    description: 'Update fields on an existing todo. Only the supplied fields change; omitted fields are preserved (fetch-then-merge).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todo_id: { type: 'string', description: 'The todo ID' },
+        content: { type: 'string', description: 'New content/title' },
+        description: { type: 'string', description: 'New rich-text description (HTML)' },
+        assignee_ids: { type: 'array', items: { type: ['string', 'number'] } },
+        completion_subscriber_ids: { type: 'array', items: { type: ['string', 'number'] } },
+        due_on: { type: 'string', description: 'New due date (YYYY-MM-DD)' },
+        starts_on: { type: 'string', description: 'New start date (YYYY-MM-DD)' },
+        notify: { type: 'boolean' },
+      },
+      required: ['project_id', 'todo_id'],
+    },
+  },
+  {
+    name: 'complete_todo',
+    description: 'Mark a todo as complete',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todo_id: { type: 'string', description: 'The todo ID' },
+      },
+      required: ['project_id', 'todo_id'],
+    },
+  },
+  {
+    name: 'uncomplete_todo',
+    description: 'Mark a previously-completed todo as incomplete',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todo_id: { type: 'string', description: 'The todo ID' },
+      },
+      required: ['project_id', 'todo_id'],
+    },
+  },
+  {
+    name: 'reposition_todo',
+    description: 'Move a todo to a new position; optionally move into a different todo list via parent_id',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        todo_id: { type: 'string', description: 'The todo ID' },
+        position: { type: 'number', description: 'New 1-based position' },
+        parent_id: { type: 'string', description: 'Optional: ID of a todo list to move this todo into' },
+      },
+      required: ['project_id', 'todo_id', 'position'],
+    },
+  },
 ];

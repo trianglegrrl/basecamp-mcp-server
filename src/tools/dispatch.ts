@@ -5,6 +5,7 @@ import { handlers as columns } from './handlers/columns.js';
 import { handlers as documents } from './handlers/documents.js';
 import { handlers as webhooks } from './handlers/webhooks.js';
 import { handlers as misc } from './handlers/misc.js';
+import { handlers as todos } from './handlers/todos.js';
 
 type Handler = (args: Record<string, any>, client: BasecampClient) => Promise<MCPToolResultEnvelope>;
 
@@ -14,6 +15,7 @@ const ALL_HANDLERS: Record<string, Handler> = {
   ...documents,
   ...webhooks,
   ...misc,
+  ...todos,
 };
 
 export async function dispatch(
