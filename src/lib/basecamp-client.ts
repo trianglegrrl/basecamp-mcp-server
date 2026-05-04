@@ -25,11 +25,14 @@ import type {
   TodoUpdateBody,
   TodolistCreateBody,
   TodolistUpdateBody,
+  CommentCreateBody,
+  CommentUpdateBody,
 } from '../types/basecamp.js';
 import { parseNextLink } from './pagination.js';
 import { getDockEntryWithDetails } from './resources/dock.js';
 import * as todosResource from './resources/todos.js';
 import * as todolistsResource from './resources/todolists.js';
+import * as commentsResource from './resources/comments.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -538,6 +541,26 @@ export class BasecampClient {
   async getComments(projectId: string, recordingId: string): Promise<Comment[]> {
     const response = await this.client.get(`/buckets/${projectId}/recordings/${recordingId}/comments.json`);
     return response.data;
+  }
+
+  async getComment(projectId: string, commentId: string): Promise<Comment> {
+    return commentsResource.getComment(this.client, projectId, commentId);
+  }
+
+  async createComment(
+    projectId: string,
+    recordingId: string,
+    body: CommentCreateBody,
+  ): Promise<Comment> {
+    return commentsResource.createComment(this.client, projectId, recordingId, body);
+  }
+
+  async updateComment(
+    projectId: string,
+    commentId: string,
+    patch: CommentUpdateBody,
+  ): Promise<Comment> {
+    return commentsResource.updateComment(this.client, projectId, commentId, patch);
   }
 
   // Document methods
