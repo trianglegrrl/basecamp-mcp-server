@@ -23,10 +23,13 @@ import type {
   MyAssignmentsResponse,
   TodoCreateBody,
   TodoUpdateBody,
+  TodolistCreateBody,
+  TodolistUpdateBody,
 } from '../types/basecamp.js';
 import { parseNextLink } from './pagination.js';
 import { getDockEntryWithDetails } from './resources/dock.js';
 import * as todosResource from './resources/todos.js';
+import * as todolistsResource from './resources/todolists.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -150,6 +153,26 @@ export class BasecampClient {
 
     const response = await this.client.get(`/buckets/${projectId}/todosets/${todoset.id}/todolists.json`);
     return response.data;
+  }
+
+  async getTodolist(projectId: string, todolistId: string): Promise<TodoList> {
+    return todolistsResource.getTodolist(this.client, projectId, todolistId);
+  }
+
+  async createTodolist(
+    projectId: string,
+    todosetId: string,
+    body: TodolistCreateBody,
+  ): Promise<TodoList> {
+    return todolistsResource.createTodolist(this.client, projectId, todosetId, body);
+  }
+
+  async updateTodolist(
+    projectId: string,
+    todolistId: string,
+    patch: TodolistUpdateBody,
+  ): Promise<TodoList> {
+    return todolistsResource.updateTodolist(this.client, projectId, todolistId, patch);
   }
 
   async getTodos(projectId: string, todolistId: string): Promise<Todo[]> {
