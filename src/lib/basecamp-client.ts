@@ -34,6 +34,7 @@ import type {
   ScheduleEntry,
   ScheduleEntryCreateBody,
   ScheduleEntryUpdateBody,
+  RecordingStatus,
 } from '../types/basecamp.js';
 import { parseNextLink } from './pagination.js';
 import { getDockEntryWithDetails } from './resources/dock.js';
@@ -42,6 +43,7 @@ import * as todolistsResource from './resources/todolists.js';
 import * as commentsResource from './resources/comments.js';
 import * as messagesResource from './resources/messages.js';
 import * as scheduleResource from './resources/schedule.js';
+import * as recordingStatusResource from './resources/recording-status.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -738,5 +740,13 @@ export class BasecampClient {
   async getEvents(projectId: string, recordingId: string): Promise<any[]> {
     const response = await this.client.get(`/buckets/${projectId}/recordings/${recordingId}/events.json`);
     return response.data;
+  }
+
+  async setRecordingStatus(
+    projectId: string,
+    recordingId: string,
+    status: RecordingStatus,
+  ): Promise<void> {
+    return recordingStatusResource.setRecordingStatus(this.client, projectId, recordingId, status);
   }
 }
