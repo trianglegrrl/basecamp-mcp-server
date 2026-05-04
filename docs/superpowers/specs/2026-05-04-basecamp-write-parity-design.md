@@ -25,7 +25,7 @@ All tool names use snake_case to match the existing convention. All tools take `
 |---|---|
 | `get_todo(project_id, todo_id)` | `GET /buckets/{project_id}/todos/{todo_id}.json` |
 | `create_todo(project_id, todolist_id, content, description?, assignee_ids?, completion_subscriber_ids?, due_on?, starts_on?, notify?)` | `POST /buckets/{project_id}/todolists/{todolist_id}/todos.json` |
-| `update_todo(project_id, todo_id, content?, description?, assignee_ids?, completion_subscriber_ids?, due_on?, starts_on?, notify?)` | `PUT /buckets/{project_id}/todos/{todo_id}.json` (fetch-then-merge) |
+| `update_todo(project_id, todo_id, content?, description?, assignee_ids?, completion_subscriber_ids?, due_on?, starts_on?, notify?)` | `PUT /buckets/{project_id}/todos/{todo_id}.json` (update strategy: `'full'` — see §3.3) |
 | `complete_todo(project_id, todo_id)` | `POST /buckets/{project_id}/todos/{todo_id}/completion.json` |
 | `uncomplete_todo(project_id, todo_id)` | `DELETE /buckets/{project_id}/todos/{todo_id}/completion.json` |
 | `reposition_todo(project_id, todo_id, position, parent_id?)` | `PUT /buckets/{project_id}/todos/{todo_id}/position.json` |
@@ -36,7 +36,7 @@ All tool names use snake_case to match the existing convention. All tools take `
 |---|---|
 | `get_todolist(project_id, todolist_id)` | `GET /buckets/{project_id}/todolists/{todolist_id}.json` |
 | `create_todolist(project_id, todoset_id, name, description?)` | `POST /buckets/{project_id}/todosets/{todoset_id}/todolists.json` |
-| `update_todolist(project_id, todolist_id, name?, description?)` | `PUT /buckets/{project_id}/todolists/{todolist_id}.json` (fetch-then-merge) |
+| `update_todolist(project_id, todolist_id, name?, description?)` | `PUT /buckets/{project_id}/todolists/{todolist_id}.json` (update strategy: `'full'` — see §3.3) |
 
 ### 2.3 Comments (3 tools)
 
@@ -44,7 +44,7 @@ All tool names use snake_case to match the existing convention. All tools take `
 |---|---|
 | `get_comment(project_id, comment_id)` | `GET /buckets/{project_id}/comments/{comment_id}.json` |
 | `create_comment(project_id, recording_id, content)` | `POST /buckets/{project_id}/recordings/{recording_id}/comments.json` |
-| `update_comment(project_id, comment_id, content)` | `PUT /buckets/{project_id}/comments/{comment_id}.json` (partial PUT — single-field, no merge needed) |
+| `update_comment(project_id, comment_id, content)` | `PUT /buckets/{project_id}/comments/{comment_id}.json` (update strategy: `'partial'` — single-field whitelist, no merge needed; see §3.3) |
 
 ### 2.4 Messages (5 tools)
 
@@ -54,7 +54,7 @@ All tool names use snake_case to match the existing convention. All tools take `
 | `get_messages(project_id, message_board_id)` | `GET /buckets/{project_id}/message_boards/{message_board_id}/messages.json` |
 | `get_message(project_id, message_id)` | `GET /buckets/{project_id}/messages/{message_id}.json` |
 | `create_message(project_id, message_board_id, subject, content?, category_id?, subscriptions?)` | `POST /buckets/{project_id}/message_boards/{message_board_id}/messages.json`. Always sends `status: 'active'` — drafts have no use case from an LLM caller, so the parameter is not exposed. |
-| `update_message(project_id, message_id, subject?, content?, category_id?)` | `PUT /buckets/{project_id}/messages/{message_id}.json` (fetch-then-merge) |
+| `update_message(project_id, message_id, subject?, content?, category_id?)` | `PUT /buckets/{project_id}/messages/{message_id}.json` (update strategy: `'full'` — see §3.3) |
 
 ### 2.5 Schedule entries (5 tools)
 
@@ -64,7 +64,7 @@ All tool names use snake_case to match the existing convention. All tools take `
 | `get_schedule_entries(project_id, schedule_id)` | `GET /buckets/{project_id}/schedules/{schedule_id}/entries.json` |
 | `get_schedule_entry(project_id, entry_id)` | `GET /buckets/{project_id}/schedule_entries/{entry_id}.json` |
 | `create_schedule_entry(project_id, schedule_id, summary, starts_at, ends_at, description?, participant_ids?, all_day?, notify?)` | `POST /buckets/{project_id}/schedules/{schedule_id}/entries.json` |
-| `update_schedule_entry(project_id, entry_id, summary?, starts_at?, ends_at?, description?, participant_ids?, all_day?, notify?)` | `PUT /buckets/{project_id}/schedule_entries/{entry_id}.json` (fetch-then-merge) |
+| `update_schedule_entry(project_id, entry_id, summary?, starts_at?, ends_at?, description?, participant_ids?, all_day?, notify?)` | `PUT /buckets/{project_id}/schedule_entries/{entry_id}.json` (update strategy: `'full'` — see §3.3) |
 
 ### 2.6 Status changes (5 tools)
 
@@ -363,4 +363,4 @@ The mock suite alone proves nothing about the real BC3 API; the live suite alone
 - `npm test` (mocks-only) passes in CI.
 - No existing test regresses.
 - No file in `src/` exceeds 800 lines, and no handler file exceeds the 400-line soft cap (split if it would).
-- `npm run build` (which runs `tsc`) passes with no type errors. Crucially: there are no `as T` casts anywhere in the merge helper or its call sites.
+- `npm run build` (which runs `tsc`) passes with no type errors. Crucially: no `as T` casts in the merge helper's return type, in any handler, or in any call site. The single local `existing as unknown as TBody` cast inside the helper body — needed because the BC3 record carries fields the body type doesn't — is the only acceptable cast and must remain narrowly scoped.
