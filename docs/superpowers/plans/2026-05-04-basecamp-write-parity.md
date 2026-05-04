@@ -4374,3 +4374,999 @@ Run: `git log --oneline -2`
 Expected: 2 new commits from Chunk 3c (messages / schedule).
 
 End of Chunk 3c.
+
+---
+
+## Chunk 4: Live-test infrastructure (sandbox-only, manual operator runs)
+
+This final chunk builds the safety guardrails and lifecycle tests that the operator runs manually against a real Basecamp sandbox project. Three layers:
+
+1. **Helpers (TDD-able with mocks):** `live-sandbox-guard.ts` (env + name sentinel checks), `live-id-store.ts` (disk-persisted captured-IDs registry), `live-leak-audit.ts` (post-run pagination walk).
+2. **Lifecycle test files (live, gated by separate vitest config):** one per resource, each running create → get-back → update → assert-merge → set-status-trashed → assert-trashed.
+3. **Cleanup CLI script:** reads any leftover `.test-live-ids-*.json` files and trashes their IDs — for crash recovery.
+
+**Hard dependency:** Chunks 1, 2a, 2b, 3a, 3b, 3c must all land before this chunk — the lifecycle tests exercise tools and client methods from every prior chunk.
+
+**Critical safety constraint:** Nothing in this chunk runs by default. `npm test` continues to run only the mocked suite. The live suite has its own opt-in command (`npm run test:live`) and refuses to start unless every guardrail passes.
+
+### Task 4.1: package.json scripts + `vitest.live.config.ts`
+
+**Files:**
+- Create: `vitest.live.config.ts`
+- Modify: `package.json` (add 2 scripts: `test:live`, `test:live:cleanup`)
+- Modify: `vitest.config.ts` (exclude `src/test/live/**` from the default run)
+
+- [ ] **Step 1: Add the live config**
+
+Create `vitest.live.config.ts`:
+
+```ts
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    include: ['src/test/live/**/*.test.ts'],
+    // Live tests are sequential — they share a real sandbox project and
+    // teardown order matters.
+    fileParallelism: false,
+    sequence: { concurrent: false },
+    // Each lifecycle test creates a real Basecamp record; give BC3 time.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+    // Don't watch — explicit one-shot runs only.
+    watch: false,
+  },
+});
+```
+
+- [ ] **Step 2: Modify the existing `vitest.config.ts` to exclude live tests**
+
+Open `vitest.config.ts`. Add an `exclude` entry under `test`:
+
+```ts
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    // ... existing settings ...
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      'src/test/live/**',  // live tests run via vitest.live.config.ts
+    ],
+  },
+});
+```
+
+If `vitest.config.ts` already has `exclude`, append `'src/test/live/**'` to the array.
+
+- [ ] **Step 3: Add the package.json scripts**
+
+Open `package.json`. Add to the `scripts` block:
+
+```json
+"test:live": "vitest run --config vitest.live.config.ts",
+"test:live:cleanup": "tsx src/scripts/test-live-cleanup.ts"
+```
+
+(The cleanup script itself is created in Task 4.6.)
+
+- [ ] **Step 3.5: Ignore captured-IDs files**
+
+The disk-persisted store from Task 4.3 writes `.test-live-ids-*.json` files to the project root. A crashed run could leave one behind, and a careless `git add .` could commit it. Append to `.gitignore`:
+
+```
+# Live-test captured IDs (per-run; cleaned by test:live:cleanup)
+.test-live-ids-*.json
+```
+
+- [ ] **Step 4: Verify the default suite still excludes live**
+
+Create an empty placeholder `src/test/live/.gitkeep` so the directory exists:
+
+```bash
+mkdir -p src/test/live && touch src/test/live/.gitkeep
+```
+
+Run: `npm test`
+Expected: PASS — no failure from the empty `live/` directory.
+
+- [ ] **Step 5: Verify the live config can resolve the (empty) live directory**
+
+Run: `npm run test:live`
+Expected: vitest exits with "No test files found" (acceptable — we haven't written tests yet). Confirms the config is wired up.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add vitest.live.config.ts vitest.config.ts package.json src/test/live/.gitkeep .gitignore
+git commit -m "chore(test): add vitest.live config + npm scripts + .gitignore for captured IDs"
+```
+
+---
+
+### Task 4.2: Sandbox-guard helper
+
+Refuses to run if (a) `BASECAMP_TEST_PROJECT_ID` is unset or (b) the project's name does not contain the sentinel string. This is the first thing every live test calls.
+
+**Files:**
+- Create: `src/lib/live-sandbox-guard.ts`
+- Create: `src/test/lib/live-sandbox-guard.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/lib/live-sandbox-guard.test.ts`:
+
+```ts
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { assertSandbox } from '../../lib/live-sandbox-guard.js';
+
+const originalEnv = { ...process.env };
+
+beforeEach(() => {
+  delete process.env.BASECAMP_TEST_PROJECT_ID;
+  delete process.env.BASECAMP_TEST_PROJECT_NAME_GUARD;
+});
+afterEach(() => {
+  process.env = { ...originalEnv };
+});
+
+function makeClient(projectName: string) {
+  return {
+    getProject: vi.fn().mockResolvedValue({ id: '100', name: projectName }),
+  } as any;
+}
+
+describe('assertSandbox', () => {
+  it('throws when BASECAMP_TEST_PROJECT_ID is unset', async () => {
+    await expect(assertSandbox(makeClient('whatever'))).rejects.toThrow(
+      /BASECAMP_TEST_PROJECT_ID is not set/,
+    );
+  });
+
+  it('throws when project name lacks the default sentinel MCP_TEST_SANDBOX', async () => {
+    process.env.BASECAMP_TEST_PROJECT_ID = '100';
+    const c = makeClient('Production Marketing Site');
+    await expect(assertSandbox(c)).rejects.toThrow(
+      /does not contain the sandbox sentinel/,
+    );
+  });
+
+  it('passes when project name contains MCP_TEST_SANDBOX', async () => {
+    process.env.BASECAMP_TEST_PROJECT_ID = '100';
+    const c = makeClient('MCP_TEST_SANDBOX project');
+    const id = await assertSandbox(c);
+    expect(id).toBe('100');
+  });
+
+  it('honours BASECAMP_TEST_PROJECT_NAME_GUARD override', async () => {
+    process.env.BASECAMP_TEST_PROJECT_ID = '100';
+    process.env.BASECAMP_TEST_PROJECT_NAME_GUARD = 'CUSTOM_GUARD';
+    const c = makeClient('contains CUSTOM_GUARD here');
+    const id = await assertSandbox(c);
+    expect(id).toBe('100');
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/lib/live-sandbox-guard.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/lib/live-sandbox-guard.ts`:
+
+```ts
+import type { BasecampClient } from './basecamp-client.js';
+
+const DEFAULT_SENTINEL = 'MCP_TEST_SANDBOX';
+
+/**
+ * Refuses to proceed unless:
+ *   1. BASECAMP_TEST_PROJECT_ID is set in the environment.
+ *   2. The named project's `name` contains the sandbox sentinel
+ *      (default 'MCP_TEST_SANDBOX'; overrideable via
+ *      BASECAMP_TEST_PROJECT_NAME_GUARD).
+ *
+ * Returns the validated project ID for downstream use.
+ *
+ * Two layers of opt-in. If either is absent, the live suite refuses to
+ * write anything to the user's account.
+ */
+export async function assertSandbox(client: BasecampClient): Promise<string> {
+  const projectId = process.env.BASECAMP_TEST_PROJECT_ID;
+  if (!projectId) {
+    throw new Error(
+      'BASECAMP_TEST_PROJECT_ID is not set. Refusing to run live tests against an unspecified project.',
+    );
+  }
+  const sentinel = process.env.BASECAMP_TEST_PROJECT_NAME_GUARD ?? DEFAULT_SENTINEL;
+  const project = await client.getProject(projectId);
+  if (!project.name?.includes(sentinel)) {
+    throw new Error(
+      `Project ${projectId} ('${project.name}') does not contain the sandbox sentinel '${sentinel}' in its name. Refusing to run live tests.`,
+    );
+  }
+  return projectId;
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run src/test/lib/live-sandbox-guard.test.ts`
+Expected: PASS — 4 tests green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/live-sandbox-guard.ts src/test/lib/live-sandbox-guard.test.ts
+git commit -m "feat(live): add assertSandbox guardrail (env + name sentinel)"
+```
+
+---
+
+### Task 4.3: Captured-IDs persistence (`live-id-store.ts`)
+
+Records every created BC3 record's `(recording_id, type)` to disk as it's created, so a teardown step (or the cleanup script) can find and trash them even if the test process crashes.
+
+**Files:**
+- Create: `src/lib/live-id-store.ts`
+- Create: `src/test/lib/live-id-store.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/lib/live-id-store.test.ts`:
+
+```ts
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import {
+  createIdStore,
+  readAllIdStores,
+  deleteIdStore,
+} from '../../lib/live-id-store.js';
+
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-live-test-'));
+});
+afterEach(() => {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe('createIdStore + record', () => {
+  it('creates a per-run JSON file with the provided run id', () => {
+    const store = createIdStore('run-abc', tmpDir);
+    expect(fs.existsSync(path.join(tmpDir, '.test-live-ids-run-abc.json'))).toBe(true);
+    expect(store.runId).toBe('run-abc');
+  });
+
+  it('records (id, type, project_id) entries appended to disk immediately', () => {
+    const store = createIdStore('run-1', tmpDir);
+    store.record({ recording_id: '42', type: 'Todo', project_id: '100' });
+    store.record({ recording_id: '43', type: 'Message', project_id: '100' });
+    const raw = fs.readFileSync(path.join(tmpDir, '.test-live-ids-run-1.json'), 'utf-8');
+    const parsed = JSON.parse(raw);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0]).toEqual({ recording_id: '42', type: 'Todo', project_id: '100' });
+    expect(parsed[1]).toEqual({ recording_id: '43', type: 'Message', project_id: '100' });
+  });
+});
+
+describe('readAllIdStores', () => {
+  it('returns all entries across all .test-live-ids-*.json files in a directory', () => {
+    const a = createIdStore('run-a', tmpDir);
+    const b = createIdStore('run-b', tmpDir);
+    a.record({ recording_id: '1', type: 'Todo', project_id: '100' });
+    b.record({ recording_id: '2', type: 'Message', project_id: '100' });
+    const all = readAllIdStores(tmpDir);
+    expect(all).toHaveLength(2);
+    expect(all.map((e) => e.recording_id).sort()).toEqual(['1', '2']);
+  });
+
+  it('returns an empty array when no id-store files exist', () => {
+    expect(readAllIdStores(tmpDir)).toEqual([]);
+  });
+});
+
+describe('deleteIdStore', () => {
+  it('removes the per-run file', () => {
+    createIdStore('run-x', tmpDir);
+    deleteIdStore('run-x', tmpDir);
+    expect(fs.existsSync(path.join(tmpDir, '.test-live-ids-run-x.json'))).toBe(false);
+  });
+
+  it('is a no-op if the file does not exist', () => {
+    expect(() => deleteIdStore('run-nope', tmpDir)).not.toThrow();
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/lib/live-id-store.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/lib/live-id-store.ts`:
+
+```ts
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+export type RecordingType =
+  | 'Todo' | 'Todolist' | 'Message' | 'Comment' | 'Schedule::Entry';
+
+export interface CapturedId {
+  recording_id: string;
+  type: RecordingType;
+  project_id: string;
+}
+
+export interface IdStore {
+  runId: string;
+  filePath: string;
+  record(entry: CapturedId): void;
+  read(): CapturedId[];
+}
+
+function fileFor(runId: string, dir: string): string {
+  return path.join(dir, `.test-live-ids-${runId}.json`);
+}
+
+export function createIdStore(runId: string, dir: string): IdStore {
+  const filePath = fileFor(runId, dir);
+  fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(filePath, JSON.stringify([], null, 2), 'utf-8');
+  }
+  return {
+    runId,
+    filePath,
+    record(entry) {
+      const current: CapturedId[] = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      current.push(entry);
+      fs.writeFileSync(filePath, JSON.stringify(current, null, 2), 'utf-8');
+    },
+    read() {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    },
+  };
+}
+
+export function readAllIdStores(dir: string): CapturedId[] {
+  if (!fs.existsSync(dir)) return [];
+  const files = fs.readdirSync(dir).filter((f) =>
+    f.startsWith('.test-live-ids-') && f.endsWith('.json'),
+  );
+  const out: CapturedId[] = [];
+  for (const f of files) {
+    const entries: CapturedId[] = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
+    out.push(...entries);
+  }
+  return out;
+}
+
+export function deleteIdStore(runId: string, dir: string): void {
+  const filePath = fileFor(runId, dir);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run src/test/lib/live-id-store.test.ts`
+Expected: PASS — 6 tests green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/live-id-store.ts src/test/lib/live-id-store.test.ts
+git commit -m "feat(live): add disk-persisted captured-IDs store for crash recovery"
+```
+
+---
+
+### Task 4.4: Per-resource lifecycle test files
+
+Five live test files — one per resource type — each running create → get-back → update → set-status-trashed against the real BC3 sandbox. Each file imports `assertSandbox` and `createIdStore` and tracks every created ID before any further test step.
+
+This task is mostly mechanical. The pattern is identical across resources; the worked example below is for `todos`. Apply it to `todolists`, `comments`, `messages`, `schedule_entries` with the obvious resource-name swaps.
+
+**Files (one per resource):**
+- Create: `src/test/live/todos.live.test.ts`
+- Create: `src/test/live/todolists.live.test.ts`
+- Create: `src/test/live/comments.live.test.ts`
+- Create: `src/test/live/messages.live.test.ts`
+- Create: `src/test/live/schedule.live.test.ts`
+- Create: `src/test/live/_setup.ts` (shared bootstrapping)
+
+- [ ] **Step 1: Write the shared bootstrap module**
+
+Create `src/test/live/_setup.ts`:
+
+```ts
+import * as path from 'node:path';
+import { config } from 'dotenv';
+import { BasecampClient } from '../../lib/basecamp-client.js';
+import { tokenStorage } from '../../lib/token-storage.js';
+import { assertSandbox } from '../../lib/live-sandbox-guard.js';
+import { createIdStore, type IdStore } from '../../lib/live-id-store.js';
+import { projectPath } from '../../lib/paths.js';
+
+config({ path: projectPath('.env') });
+
+export interface LiveContext {
+  client: BasecampClient;
+  projectId: string;
+  store: IdStore;
+  runId: string;
+  prefix: string;
+}
+
+export async function bootstrapLive(): Promise<LiveContext> {
+  const tokenData = await tokenStorage.getToken();
+  if (!tokenData?.accessToken) {
+    throw new Error('Live tests require an OAuth token; run `npm run auth` first.');
+  }
+  const accountId = tokenData.accountId ?? process.env.BASECAMP_ACCOUNT_ID;
+  if (!accountId) throw new Error('BASECAMP_ACCOUNT_ID is unset.');
+
+  const client = new BasecampClient({
+    accessToken: tokenData.accessToken,
+    accountId,
+    userAgent: process.env.USER_AGENT ?? 'Basecamp MCP Server (live tests)',
+    authMode: 'oauth',
+  });
+
+  const projectId = await assertSandbox(client);
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const store = createIdStore(runId, projectPath('.'));
+  const prefix = `[mcp-test-${runId}]`;
+
+  return { client, projectId, store, runId, prefix };
+}
+```
+
+- [ ] **Step 2: Write the todos lifecycle test**
+
+Create `src/test/live/todos.live.test.ts`:
+
+```ts
+import { describe, it, expect, beforeAll } from 'vitest';
+import { bootstrapLive, type LiveContext } from './_setup.js';
+
+let ctx: LiveContext;
+let todolistId: string;
+
+beforeAll(async () => {
+  ctx = await bootstrapLive();
+  // Resolve the project's todoset to find a list to write into.
+  const project = await ctx.client.getProject(ctx.projectId);
+  const todoset = project.dock.find((d: any) => d.name === 'todoset');
+  if (!todoset) throw new Error('Sandbox project has no todoset.');
+  // Reuse the first todolist if any exists; otherwise create a sandbox list.
+  const lists = await ctx.client.getTodoLists(ctx.projectId);
+  if (lists.length > 0) {
+    todolistId = String((lists[0] as any).id);
+  } else {
+    const created = await ctx.client.createTodolist(
+      ctx.projectId, String(todoset.id), { name: `${ctx.prefix} sandbox list` },
+    );
+    todolistId = String((created as any).id);
+    ctx.store.record({ recording_id: todolistId, type: 'Todolist', project_id: ctx.projectId });
+  }
+});
+
+describe('todos lifecycle (LIVE)', () => {
+  let todoId: string;
+
+  it('create_todo: creates a prefixed todo and records its ID', async () => {
+    const created = await ctx.client.createTodo(ctx.projectId, todolistId, {
+      content: `${ctx.prefix} create-then-trash`,
+      description: 'initial',
+      due_on: '2026-12-31',
+    });
+    todoId = String((created as any).id);
+    ctx.store.record({ recording_id: todoId, type: 'Todo', project_id: ctx.projectId });
+    expect((created as any).content).toContain(ctx.prefix);
+  });
+
+  it('get_todo: round-trips the created fields', async () => {
+    const fetched = await ctx.client.getTodo(ctx.projectId, todoId);
+    expect((fetched as any).content).toContain(ctx.prefix);
+    expect((fetched as any).due_on).toBe('2026-12-31');
+  });
+
+  it("update_todo: 'full' merge preserves description while changing content", async () => {
+    await ctx.client.updateTodo(ctx.projectId, todoId, { content: `${ctx.prefix} updated content` });
+    const fetched = await ctx.client.getTodo(ctx.projectId, todoId);
+    expect((fetched as any).content).toContain('updated content');
+    expect((fetched as any).description).toBe('initial'); // proves merge worked
+  });
+
+  it('set_todo_status: trashed', async () => {
+    await ctx.client.setRecordingStatus(ctx.projectId, todoId, 'trashed');
+    const fetched = await ctx.client.getTodo(ctx.projectId, todoId);
+    expect((fetched as any).status).toBe('trashed');
+  });
+
+  it('set_todo_status: idempotent (trashing twice succeeds)', async () => {
+    await expect(
+      ctx.client.setRecordingStatus(ctx.projectId, todoId, 'trashed'),
+    ).resolves.not.toThrow();
+  });
+});
+```
+
+- [ ] **Step 3: Write the four other lifecycle test files**
+
+Apply the same pattern as `todos.live.test.ts`:
+
+- `todolists.live.test.ts` — create a prefixed todolist (record id), GET, update name, set status to trashed.
+- `comments.live.test.ts` — create a prefixed todo (record id) to comment on, post a comment with the prefix in its content (record id), GET it, update content (partial PUT — no merge needed), set status to trashed. **Note on the partial-strategy invariant:** spec §5.2 asks the lifecycle to assert "every other field is unchanged on the server side" for partial-strategy resources. For comments the only mutable field is `content`, so the invariant collapses to "the change took effect" — there's no sibling field to assert preservation on. Just verify the new content was written; no extra preservation assertion required.
+- `messages.live.test.ts` — call `getMessageBoard` to find the board, create a prefixed message (record id), GET, update subject (full merge — verify content survives), set status to trashed.
+- `schedule.live.test.ts` — call `getSchedule` to find the schedule, create a prefixed entry (record id) with valid `starts_at`/`ends_at`, GET, update `summary` (full merge — verify times survive), set status to trashed.
+
+For each: every prefixed artifact MUST be recorded via `ctx.store.record(...)` BEFORE any subsequent assertion. The whole point of the disk-persisted store is "if a later step crashes, the cleanup script knows what to trash."
+
+- [ ] **Step 4: Run the live suite (operator only — needs sandbox + .env)**
+
+This step requires:
+1. A real Basecamp project named like `MCP Write Test Sandbox` (or `BASECAMP_TEST_PROJECT_NAME_GUARD` matching its name).
+2. `.env` with `BASECAMP_ACCOUNT_ID=...` and OAuth token already set up via `npm run auth`.
+3. `BASECAMP_TEST_PROJECT_ID=...` set in `.env` or the shell.
+
+Run: `BASECAMP_TEST_PROJECT_ID=<sandbox-id> npm run test:live`
+Expected: every lifecycle test passes; `.test-live-ids-{run-id}.json` is created and populated; the sandbox project shows the prefixed artifacts in its trash.
+
+If the suite fails after some artifacts are created, run `npm run test:live:cleanup` (built in Task 4.6) to trash leftovers.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/test/live/_setup.ts src/test/live/*.live.test.ts
+git commit -m "feat(live): add lifecycle tests for todos/todolists/comments/messages/schedule"
+```
+
+---
+
+### Task 4.5: Leak-audit step (post-suite check)
+
+After the lifecycle tests finish, walk every recording in the sandbox project and warn if any active item still carries the test prefix. Defense in depth: should never fire if Task 4.4 ran cleanly.
+
+**Files:**
+- Create: `src/lib/live-leak-audit.ts`
+- Create: `src/test/lib/live-leak-audit.test.ts`
+- Modify: `src/test/live/_setup.ts` (export an `afterAllLiveTests` cleanup hook)
+- Modify: each `*.live.test.ts` to call the audit in an `afterAll`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/lib/live-leak-audit.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { auditForLeaks, RECORDING_TYPES } from '../../lib/live-leak-audit.js';
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+
+function makeMockClient(byType: Record<string, any[]>) {
+  const c = {
+    getRecordings: vi.fn(async (opts: any) => byType[opts.type] ?? []),
+  } as any;
+  return c as BasecampClient;
+}
+
+describe('auditForLeaks', () => {
+  it('reports no leaks when no prefixed items remain active', async () => {
+    const client = makeMockClient({
+      Todo: [{ id: '1', title: 'a real one', status: 'active' }],
+      Todolist: [], Message: [], Comment: [], 'Schedule::Entry': [],
+    });
+    const leaks = await auditForLeaks(client, '100', '[mcp-test-run-x]');
+    expect(leaks).toEqual([]);
+  });
+
+  it('reports active prefixed items as leaks', async () => {
+    const client = makeMockClient({
+      Todo: [{ id: '7', title: '[mcp-test-run-x] forgot to trash', status: 'active' }],
+      Todolist: [], Message: [], Comment: [], 'Schedule::Entry': [],
+    });
+    const leaks = await auditForLeaks(client, '100', '[mcp-test-run-x]');
+    expect(leaks).toHaveLength(1);
+    expect(leaks[0]).toMatchObject({ type: 'Todo', id: '7' });
+  });
+
+  it('iterates every recording type and aggregates leaks', async () => {
+    const client = makeMockClient({
+      Todo: [{ id: '1', title: '[mcp-test-x] a', status: 'active' }],
+      Todolist: [{ id: '2', name: '[mcp-test-x] b', status: 'active' }],
+      Message: [{ id: '3', subject: '[mcp-test-x] c', status: 'active' }],
+      Comment: [], 'Schedule::Entry': [],
+    });
+    const leaks = await auditForLeaks(client, '100', '[mcp-test-x]');
+    expect(leaks).toHaveLength(3);
+  });
+
+  it('exports the canonical RECORDING_TYPES tuple per spec §5.2', () => {
+    expect(RECORDING_TYPES).toEqual([
+      'Todo', 'Todolist', 'Message', 'Comment', 'Schedule::Entry',
+    ]);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/lib/live-leak-audit.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Add the missing `getRecordings` client method**
+
+The audit needs to walk `/projects/recordings.json?bucket={id}&type={t}` paginated. The existing `getRecordingsTodos` is hard-coded to `type: Todo`. Generalise it.
+
+Open `src/lib/basecamp-client.ts`. Find `getRecordingsTodos` (around lines 204-218). Add a sibling method that takes the type as a parameter and uses `walkPaginated` from `pagination.ts`:
+
+```ts
+import { walkPaginated } from './pagination.js';
+
+// ...inside the class:
+
+async getRecordings(opts: {
+  type: string;
+  bucket?: string;
+  status?: 'active' | 'archived' | 'trashed';
+}): Promise<any[]> {
+  const params: Record<string, string> = { type: opts.type };
+  if (opts.bucket) params.bucket = opts.bucket;
+  if (opts.status) params.status = opts.status;
+  return walkPaginated(
+    (url, config) => this.client.get(url, config as any),
+    '/projects/recordings.json',
+    { params },
+  );
+}
+```
+
+- [ ] **Step 4: Write the leak-audit implementation**
+
+Create `src/lib/live-leak-audit.ts`:
+
+```ts
+import type { BasecampClient } from './basecamp-client.js';
+
+export const RECORDING_TYPES = [
+  'Todo', 'Todolist', 'Message', 'Comment', 'Schedule::Entry',
+] as const;
+
+export type RecordingTypeName = typeof RECORDING_TYPES[number];
+
+export interface Leak {
+  type: RecordingTypeName;
+  id: string;
+  title?: string;
+}
+
+function titleOf(item: any): string | undefined {
+  return item?.title ?? item?.name ?? item?.subject ?? item?.summary ?? item?.content;
+}
+
+export async function auditForLeaks(
+  client: BasecampClient,
+  projectId: string,
+  prefix: string,
+): Promise<Leak[]> {
+  const leaks: Leak[] = [];
+  for (const type of RECORDING_TYPES) {
+    const items = await client.getRecordings({ type, bucket: projectId, status: 'active' });
+    for (const item of items) {
+      const title = titleOf(item);
+      if (title?.includes(prefix)) {
+        leaks.push({ type, id: String(item.id), title });
+      }
+    }
+  }
+  return leaks;
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `npx vitest run src/test/lib/live-leak-audit.test.ts`
+Expected: PASS — 4 tests green.
+
+- [ ] **Step 6: Wire the audit into the live test bootstrap**
+
+Open `src/test/live/_setup.ts`. Append an `afterAllLiveTests` helper that the per-resource files call from their `afterAll`:
+
+```ts
+import { auditForLeaks } from '../../lib/live-leak-audit.js';
+import { deleteIdStore } from '../../lib/live-id-store.js';
+import { projectPath } from '../../lib/paths.js';
+
+export async function afterAllLiveTests(ctx: LiveContext): Promise<void> {
+  // Defense-in-depth audit. Should report nothing if the lifecycle tests
+  // trashed everything they created.
+  const leaks = await auditForLeaks(ctx.client, ctx.projectId, ctx.prefix);
+  if (leaks.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(`[live-test leak audit] ${leaks.length} prefixed item(s) still active:`, leaks);
+  }
+  // If audit clean and store readable, drop the per-run JSON file.
+  deleteIdStore(ctx.runId, projectPath('.'));
+}
+```
+
+In each `*.live.test.ts`, wire it up:
+
+```ts
+import { afterAll } from 'vitest';
+import { afterAllLiveTests } from './_setup.js';
+afterAll(async () => {
+  if (ctx) await afterAllLiveTests(ctx);
+});
+```
+
+- [ ] **Step 7: Run the full mock suite to confirm no regression**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/lib/live-leak-audit.ts src/test/lib/live-leak-audit.test.ts src/lib/basecamp-client.ts src/test/live/_setup.ts src/test/live/*.live.test.ts
+git commit -m "feat(live): add post-suite leak audit (defense-in-depth) + getRecordings"
+```
+
+---
+
+### Task 4.6: Cleanup script — `npm run test:live:cleanup`
+
+Reads any leftover `.test-live-ids-*.json` files (e.g. from a crashed test run), trashes every recorded ID, then removes the file. Operator-invoked.
+
+**Files:**
+- Create: `src/scripts/test-live-cleanup.ts`
+- Create: `src/test/scripts/test-live-cleanup.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/scripts/test-live-cleanup.test.ts`:
+
+```ts
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { runCleanup } from '../../scripts/test-live-cleanup.js';
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-cleanup-'));
+});
+afterEach(() => {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+function makeMockClient() {
+  return { setRecordingStatus: vi.fn().mockResolvedValue(undefined) } as unknown as BasecampClient;
+}
+
+describe('runCleanup', () => {
+  it('trashes every captured ID across every leftover store file', async () => {
+    fs.writeFileSync(path.join(tmpDir, '.test-live-ids-run-a.json'), JSON.stringify([
+      { recording_id: '1', type: 'Todo', project_id: '100' },
+      { recording_id: '2', type: 'Message', project_id: '100' },
+    ]));
+    fs.writeFileSync(path.join(tmpDir, '.test-live-ids-run-b.json'), JSON.stringify([
+      { recording_id: '3', type: 'Comment', project_id: '100' },
+    ]));
+    const client = makeMockClient();
+
+    const summary = await runCleanup(client, tmpDir);
+
+    expect(summary.trashed).toBe(3);
+    expect(summary.failed).toBe(0);
+    expect(client.setRecordingStatus).toHaveBeenCalledTimes(3);
+    expect(client.setRecordingStatus).toHaveBeenCalledWith('100', '1', 'trashed');
+    expect(client.setRecordingStatus).toHaveBeenCalledWith('100', '2', 'trashed');
+    expect(client.setRecordingStatus).toHaveBeenCalledWith('100', '3', 'trashed');
+  });
+
+  it('removes id-store files after successful trashing', async () => {
+    fs.writeFileSync(path.join(tmpDir, '.test-live-ids-run-x.json'), JSON.stringify([
+      { recording_id: '1', type: 'Todo', project_id: '100' },
+    ]));
+    const client = makeMockClient();
+    await runCleanup(client, tmpDir);
+    expect(fs.existsSync(path.join(tmpDir, '.test-live-ids-run-x.json'))).toBe(false);
+  });
+
+  it('counts failures and keeps the file when any trash fails', async () => {
+    fs.writeFileSync(path.join(tmpDir, '.test-live-ids-run-y.json'), JSON.stringify([
+      { recording_id: '1', type: 'Todo', project_id: '100' },
+      { recording_id: '2', type: 'Todo', project_id: '100' },
+    ]));
+    const client = {
+      setRecordingStatus: vi.fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('BC3 hiccup')),
+    } as unknown as BasecampClient;
+
+    const summary = await runCleanup(client, tmpDir);
+    expect(summary.trashed).toBe(1);
+    expect(summary.failed).toBe(1);
+    // File preserved so operator can retry.
+    expect(fs.existsSync(path.join(tmpDir, '.test-live-ids-run-y.json'))).toBe(true);
+  });
+
+  it('returns an empty summary when there are no id-store files', async () => {
+    const client = makeMockClient();
+    const summary = await runCleanup(client, tmpDir);
+    expect(summary.trashed).toBe(0);
+    expect(summary.failed).toBe(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/scripts/test-live-cleanup.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Create `src/scripts/test-live-cleanup.ts`:
+
+```ts
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { config } from 'dotenv';
+import { BasecampClient } from '../lib/basecamp-client.js';
+import { tokenStorage } from '../lib/token-storage.js';
+import { readAllIdStores, deleteIdStore } from '../lib/live-id-store.js';
+import { projectPath } from '../lib/paths.js';
+
+config({ path: projectPath('.env') });
+
+export interface CleanupSummary {
+  trashed: number;
+  failed: number;
+}
+
+/**
+ * Trash every captured ID across every .test-live-ids-*.json file in the
+ * given directory. Returns a summary; preserves files that had failures
+ * (so a retry can pick them up).
+ */
+export async function runCleanup(
+  client: BasecampClient,
+  dir: string,
+): Promise<CleanupSummary> {
+  const summary: CleanupSummary = { trashed: 0, failed: 0 };
+  if (!fs.existsSync(dir)) return summary;
+
+  const files = fs.readdirSync(dir).filter((f) =>
+    f.startsWith('.test-live-ids-') && f.endsWith('.json'),
+  );
+
+  for (const file of files) {
+    const runId = file.replace(/^\.test-live-ids-/, '').replace(/\.json$/, '');
+    const filePath = path.join(dir, file);
+    const entries = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    let allSucceeded = true;
+    for (const entry of entries) {
+      try {
+        await client.setRecordingStatus(entry.project_id, entry.recording_id, 'trashed');
+        summary.trashed++;
+      } catch {
+        summary.failed++;
+        allSucceeded = false;
+      }
+    }
+    if (allSucceeded) deleteIdStore(runId, dir);
+  }
+
+  return summary;
+}
+
+async function main(): Promise<void> {
+  const tokenData = await tokenStorage.getToken();
+  if (!tokenData?.accessToken) {
+    console.error('Cleanup needs an OAuth token. Run `npm run auth` first.');
+    process.exit(1);
+  }
+  const accountId = tokenData.accountId ?? process.env.BASECAMP_ACCOUNT_ID;
+  if (!accountId) {
+    console.error('BASECAMP_ACCOUNT_ID is unset.');
+    process.exit(1);
+  }
+  const client = new BasecampClient({
+    accessToken: tokenData.accessToken,
+    accountId,
+    userAgent: process.env.USER_AGENT ?? 'Basecamp MCP cleanup',
+    authMode: 'oauth',
+  });
+  const summary = await runCleanup(client, projectPath('.'));
+  console.log(`Cleanup complete. Trashed: ${summary.trashed}. Failed: ${summary.failed}.`);
+  if (summary.failed > 0) process.exit(2);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `npx vitest run src/test/scripts/test-live-cleanup.test.ts`
+Expected: PASS — 4 tests green.
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/scripts/test-live-cleanup.ts src/test/scripts/test-live-cleanup.test.ts
+git commit -m "feat(live): add npm run test:live:cleanup for crash recovery"
+```
+
+---
+
+### Task 4.7: Verify Chunk 4 (and the full project)
+
+- [ ] **Step 1: Run the default mock suite**
+
+Run: `npm test`
+Expected: PASS — every test green. Cumulative new tests added in Chunk 4: 4 sandbox-guard + 6 id-store + 4 leak-audit + 4 cleanup = 18 mock-side tests. The 5 lifecycle test files DO NOT run here (they live under `src/test/live/` which is excluded).
+
+- [ ] **Step 2: Run the build**
+
+Run: `npm run build`
+Expected: No type errors.
+
+- [ ] **Step 3: Confirm the live config refuses to start without sandbox guards**
+
+Run: `npm run test:live` *without* setting `BASECAMP_TEST_PROJECT_ID`
+Expected: vitest starts, the first lifecycle file's `beforeAll` fails with a clear "BASECAMP_TEST_PROJECT_ID is not set" error. No writes happen.
+
+- [ ] **Step 4: Manual operator verification (live)**
+
+This is the gate that closes the spec §7 acceptance criteria:
+
+1. Create a Basecamp project named `MCP Write Test Sandbox` (or any name containing `MCP_TEST_SANDBOX`).
+2. Set `BASECAMP_TEST_PROJECT_ID=<sandbox project ID>` in your shell or `.env`.
+3. Run `npm run test:live`.
+4. Verify in the Basecamp UI: every prefixed `[mcp-test-...]` artifact created during the run now appears in the project's trash. Nothing else in the project was touched.
+5. Confirm `.test-live-ids-*.json` files are gone (cleaned by `afterAllLiveTests`).
+6. Optional: artificially crash a test mid-way (e.g. comment out one trashing step), re-run `npm run test:live`, then run `npm run test:live:cleanup` and verify the orphan IDs get trashed and the file is removed.
+
+- [ ] **Step 5: Final acceptance walk (spec §7)**
+
+Re-walk the spec §7 acceptance criteria from start to finish — every item should now be satisfied. Items previously deferred from Chunk 3:
+
+- [ ] `npm run test:live` runs end-to-end against a sandbox project and exits 0; visual inspection shows only prefixed test artifacts, all trashed. Verified by Step 4 above.
+- [ ] `npm run test:live:cleanup` reads any leftover `.test-live-ids-*.json` files and trashes their IDs; runs idempotently. Verified by Step 4.6 of the operator workflow above.
+
+- [ ] **Step 6: Confirm git history**
+
+Run: `git log --oneline -7`
+Expected: 6 new commits from Chunk 4 (config + scripts, sandbox-guard, id-store, lifecycle tests, leak-audit + getRecordings, cleanup script).
+
+End of Chunk 4. End of plan.
