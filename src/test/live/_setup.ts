@@ -46,8 +46,13 @@ export async function afterAllLiveTests(ctx: LiveContext): Promise<void> {
   const leaks = await auditForLeaks(ctx.client, ctx.projectId, ctx.prefix);
   if (leaks.length > 0) {
     // eslint-disable-next-line no-console
-    console.warn(`[live-test leak audit] ${leaks.length} prefixed item(s) still active:`, leaks);
+    console.warn(
+      `[live-test leak audit] ${leaks.length} prefixed item(s) still active:`,
+      leaks,
+      `\nPreserving capture file for retry via \`npm run test:live:cleanup\`.`,
+    );
+    return;
   }
-  // If audit clean and store readable, drop the per-run JSON file.
+  // Audit clean — drop the per-run JSON file.
   deleteIdStore(ctx.runId, projectPath('.'));
 }

@@ -3,6 +3,7 @@ import { bootstrapLive, afterAllLiveTests, type LiveContext } from './_setup.js'
 
 let ctx: LiveContext;
 let parentTodoId: string;
+let createdSandboxListId: string | null = null;
 
 beforeAll(async () => {
   ctx = await bootstrapLive();
@@ -19,6 +20,7 @@ beforeAll(async () => {
       ctx.projectId, String(todoset.id), { name: `${ctx.prefix} sandbox list` },
     );
     todolistId = String((created as any).id);
+    createdSandboxListId = todolistId;
     ctx.store.record({ recording_id: todolistId, type: 'Todolist', project_id: ctx.projectId });
   }
   // Create the parent todo we'll comment on.
@@ -30,7 +32,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (ctx) await afterAllLiveTests(ctx);
+  if (!ctx) return;
+  // Trash the parent fixtures beforeAll created. Swallow individual errors so
+  // the leak audit still runs and surfaces anything that survives.
+  await ctx.client.setRecordingStatus(ctx.projectId, parentTodoId, 'trashed').catch(() => {});
+  if (createdSandboxListId) {
+    await ctx.client.setRecordingStatus(ctx.projectId, createdSandboxListId, 'trashed').catch(() => {});
+  }
+  await afterAllLiveTests(ctx);
 });
 
 describe('comments lifecycle (LIVE)', () => {

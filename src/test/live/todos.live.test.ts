@@ -3,6 +3,7 @@ import { bootstrapLive, afterAllLiveTests, type LiveContext } from './_setup.js'
 
 let ctx: LiveContext;
 let todolistId: string;
+let createdSandboxListId: string | null = null;
 
 beforeAll(async () => {
   ctx = await bootstrapLive();
@@ -19,12 +20,17 @@ beforeAll(async () => {
       ctx.projectId, String(todoset.id), { name: `${ctx.prefix} sandbox list` },
     );
     todolistId = String((created as any).id);
+    createdSandboxListId = todolistId;
     ctx.store.record({ recording_id: todolistId, type: 'Todolist', project_id: ctx.projectId });
   }
 });
 
 afterAll(async () => {
-  if (ctx) await afterAllLiveTests(ctx);
+  if (!ctx) return;
+  if (createdSandboxListId) {
+    await ctx.client.setRecordingStatus(ctx.projectId, createdSandboxListId, 'trashed').catch(() => {});
+  }
+  await afterAllLiveTests(ctx);
 });
 
 describe('todos lifecycle (LIVE)', () => {
