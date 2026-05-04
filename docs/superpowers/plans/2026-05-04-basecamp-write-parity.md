@@ -2914,3 +2914,910 @@ Run: `grep -E "name: '[a-z_]+'" src/tools/registrations.ts | sed -E "s/.*name: '
 Cross-reference each line against the merged keys of `ALL_HANDLERS` in `src/tools/dispatch.ts` (every `handlers/*.ts` export). The two sets must match exactly. A registered tool with no handler entry will silently return `Unknown tool`; a handler entry with no registration is dead code.
 
 End of Chunk 3a.
+
+---
+
+## Chunk 3b: New tool handlers — todos, todolists, comments, recording-status
+
+This chunk wires up 17 of the 27 new MCP tools (todos: 6, todolists: 3, comments: 3, recording-status: 5). Each task adds one handler module + its tests + the corresponding registrations + the dispatch import. The handler patterns from Chunk 3a apply unchanged.
+
+**Hard dependency:** Chunk 2a (todos/todolists/comments resource methods) and Chunk 2b (recording-status resource method) and Chunk 3a (handler scaffolding) must all land before this chunk.
+
+**Pattern reminder for every task in this chunk:**
+
+```ts
+// src/tools/handlers/<resource>.ts
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+import type { MCPToolResultEnvelope } from '../result.js';
+import { successResult } from '../result.js';
+
+async function handle<ToolName>(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const data = await c.someClientMethod(args.foo, args.bar);
+  return successResult({ data, message: `human-readable confirmation` });
+}
+
+export const handlers = {
+  tool_name: handle<ToolName>,
+  // ...
+} as const;
+```
+
+`dispatch.ts` gains one import per new handler module and a spread into `ALL_HANDLERS`:
+
+```ts
+import { handlers as todos } from './handlers/todos.js';
+const ALL_HANDLERS: Record<string, Handler> = { ...cards, ...columns, ..., ...todos };
+```
+
+`registrations.ts` gains one entry per new tool, in the same shape as the existing entries.
+
+### Task 3b.1: New handler module — `src/tools/handlers/todos.ts` + 6 tools
+
+**Tools added:** `get_todo`, `create_todo`, `update_todo`, `complete_todo`, `uncomplete_todo`, `reposition_todo`.
+
+**Files:**
+- Create: `src/tools/handlers/todos.ts`
+- Create: `src/test/tools/handlers/todos.test.ts`
+- Modify: `src/tools/registrations.ts` (append 6 tool entries)
+- Modify: `src/tools/dispatch.ts` (add 1 import + spread into ALL_HANDLERS)
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/tools/handlers/todos.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { handlers } from '../../../tools/handlers/todos.js';
+import type { BasecampClient } from '../../../lib/basecamp-client.js';
+
+function makeMockClient(): BasecampClient {
+  return {
+    getTodo: vi.fn(),
+    createTodo: vi.fn(),
+    updateTodo: vi.fn(),
+    completeTodo: vi.fn(),
+    uncompleteTodo: vi.fn(),
+    repositionTodo: vi.fn(),
+  } as unknown as BasecampClient;
+}
+
+function payload(result: { content: Array<{ text: string }> }) {
+  return JSON.parse(result.content[0].text);
+}
+
+describe('todos handlers', () => {
+  it('get_todo: forwards (project_id, todo_id)', async () => {
+    const client = makeMockClient();
+    (client.getTodo as any).mockResolvedValue({ id: '1', content: 'x' });
+    const r = await handlers.get_todo({ project_id: '100', todo_id: '1' }, client);
+    expect(client.getTodo).toHaveBeenCalledWith('100', '1');
+    expect(payload(r).status).toBe('success');
+    expect(payload(r).todo.id).toBe('1');
+  });
+
+  it('create_todo: forwards body shape', async () => {
+    const client = makeMockClient();
+    (client.createTodo as any).mockResolvedValue({ id: '99' });
+    await handlers.create_todo({
+      project_id: '100',
+      todolist_id: '50',
+      content: 'New todo',
+      description: '<em>x</em>',
+      assignee_ids: [10, 20],
+      due_on: '2026-09-01',
+      notify: true,
+    }, client);
+    expect(client.createTodo).toHaveBeenCalledWith('100', '50', {
+      content: 'New todo',
+      description: '<em>x</em>',
+      assignee_ids: [10, 20],
+      completion_subscriber_ids: undefined,
+      due_on: '2026-09-01',
+      starts_on: undefined,
+      notify: true,
+    });
+  });
+
+  it('update_todo: forwards patch (only the supplied keys)', async () => {
+    const client = makeMockClient();
+    (client.updateTodo as any).mockResolvedValue({ id: '1', content: 'new' });
+    await handlers.update_todo({ project_id: '100', todo_id: '1', content: 'new' }, client);
+    expect(client.updateTodo).toHaveBeenCalledWith('100', '1', { content: 'new' });
+  });
+
+  it('complete_todo: dispatches and returns success', async () => {
+    const client = makeMockClient();
+    (client.completeTodo as any).mockResolvedValue(undefined);
+    const r = await handlers.complete_todo({ project_id: '100', todo_id: '1' }, client);
+    expect(client.completeTodo).toHaveBeenCalledWith('100', '1');
+    expect(payload(r).status).toBe('success');
+  });
+
+  it('uncomplete_todo: dispatches and returns success', async () => {
+    const client = makeMockClient();
+    (client.uncompleteTodo as any).mockResolvedValue(undefined);
+    await handlers.uncomplete_todo({ project_id: '100', todo_id: '1' }, client);
+    expect(client.uncompleteTodo).toHaveBeenCalledWith('100', '1');
+  });
+
+  it('reposition_todo: forwards position and optional parent_id', async () => {
+    const client = makeMockClient();
+    (client.repositionTodo as any).mockResolvedValue(undefined);
+    await handlers.reposition_todo({
+      project_id: '100', todo_id: '1', position: 3, parent_id: '777',
+    }, client);
+    expect(client.repositionTodo).toHaveBeenCalledWith('100', '1', 3, '777');
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/tools/handlers/todos.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the handler module**
+
+Create `src/tools/handlers/todos.ts`:
+
+```ts
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+import { successResult, type MCPToolResultEnvelope } from '../result.js';
+
+async function getTodo(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const todo = await c.getTodo(args.project_id, args.todo_id);
+  return successResult({ todo });
+}
+
+async function createTodo(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const todo = await c.createTodo(args.project_id, args.todolist_id, {
+    content: args.content,
+    description: args.description,
+    assignee_ids: args.assignee_ids,
+    completion_subscriber_ids: args.completion_subscriber_ids,
+    due_on: args.due_on,
+    starts_on: args.starts_on,
+    notify: args.notify,
+  });
+  return successResult({ todo, message: `Todo '${args.content}' created` });
+}
+
+async function updateTodo(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const { project_id, todo_id, ...patch } = args;
+  const todo = await c.updateTodo(project_id, todo_id, patch);
+  return successResult({ todo, message: `Todo updated` });
+}
+
+async function completeTodo(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  await c.completeTodo(args.project_id, args.todo_id);
+  return successResult({ message: 'Todo marked complete' });
+}
+
+async function uncompleteTodo(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  await c.uncompleteTodo(args.project_id, args.todo_id);
+  return successResult({ message: 'Todo marked incomplete' });
+}
+
+async function repositionTodo(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  await c.repositionTodo(args.project_id, args.todo_id, args.position, args.parent_id);
+  return successResult({ message: `Todo repositioned to ${args.position}` });
+}
+
+export const handlers = {
+  get_todo: getTodo,
+  create_todo: createTodo,
+  update_todo: updateTodo,
+  complete_todo: completeTodo,
+  uncomplete_todo: uncompleteTodo,
+  reposition_todo: repositionTodo,
+} as const;
+```
+
+Note the `update_todo` shape — it strips `project_id` and `todo_id` from `args` and treats the remaining keys as the merge patch. This matches the BC3 fetch-then-merge contract from `src/lib/resources/todos.ts`.
+
+- [ ] **Step 4: Add the 6 tool registrations**
+
+Append to `src/tools/registrations.ts` (inside the array literal, anywhere logical — group with todo-related entries if there's a section, otherwise append at the end):
+
+```ts
+{
+  name: 'get_todo',
+  description: 'Get a single todo by ID',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todo_id: { type: 'string', description: 'The todo ID' },
+    },
+    required: ['project_id', 'todo_id'],
+  },
+},
+{
+  name: 'create_todo',
+  description: 'Create a new todo in a todo list',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todolist_id: { type: 'string', description: 'The todo list ID' },
+      content: { type: 'string', description: 'The todo content/title (required)' },
+      description: { type: 'string', description: 'Optional rich-text description (HTML)' },
+      assignee_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Optional array of person IDs to assign' },
+      completion_subscriber_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Optional array of person IDs to notify on completion' },
+      due_on: { type: 'string', description: 'Optional due date (YYYY-MM-DD)' },
+      starts_on: { type: 'string', description: 'Optional start date (YYYY-MM-DD)' },
+      notify: { type: 'boolean', description: 'Whether to notify assignees (default false)' },
+    },
+    required: ['project_id', 'todolist_id', 'content'],
+  },
+},
+{
+  name: 'update_todo',
+  description: 'Update fields on an existing todo. Only the supplied fields change; omitted fields are preserved (fetch-then-merge).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todo_id: { type: 'string', description: 'The todo ID' },
+      content: { type: 'string', description: 'New content/title' },
+      description: { type: 'string', description: 'New rich-text description (HTML)' },
+      assignee_ids: { type: 'array', items: { type: ['string', 'number'] } },
+      completion_subscriber_ids: { type: 'array', items: { type: ['string', 'number'] } },
+      due_on: { type: 'string', description: 'New due date (YYYY-MM-DD)' },
+      starts_on: { type: 'string', description: 'New start date (YYYY-MM-DD)' },
+      notify: { type: 'boolean' },
+    },
+    required: ['project_id', 'todo_id'],
+  },
+},
+{
+  name: 'complete_todo',
+  description: 'Mark a todo as complete',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todo_id: { type: 'string', description: 'The todo ID' },
+    },
+    required: ['project_id', 'todo_id'],
+  },
+},
+{
+  name: 'uncomplete_todo',
+  description: 'Mark a previously-completed todo as incomplete',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todo_id: { type: 'string', description: 'The todo ID' },
+    },
+    required: ['project_id', 'todo_id'],
+  },
+},
+{
+  name: 'reposition_todo',
+  description: 'Move a todo to a new position; optionally move into a different todo list via parent_id',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todo_id: { type: 'string', description: 'The todo ID' },
+      position: { type: 'number', description: 'New 1-based position' },
+      parent_id: { type: 'string', description: 'Optional: ID of a todo list to move this todo into' },
+    },
+    required: ['project_id', 'todo_id', 'position'],
+  },
+},
+```
+
+- [ ] **Step 5: Add the import + spread to `dispatch.ts`**
+
+In `src/tools/dispatch.ts`, add the import alongside the existing handler imports:
+
+```ts
+import { handlers as todos } from './handlers/todos.js';
+```
+
+Add `...todos` to the `ALL_HANDLERS` object spread:
+
+```ts
+const ALL_HANDLERS: Record<string, Handler> = {
+  ...cards,
+  ...columns,
+  ...documents,
+  ...webhooks,
+  ...misc,
+  ...todos,
+};
+```
+
+- [ ] **Step 6: Run test to verify it passes**
+
+Run: `npx vitest run src/test/tools/handlers/todos.test.ts`
+Expected: PASS — 6 tests green.
+
+- [ ] **Step 7: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/tools/handlers/todos.ts src/test/tools/handlers/todos.test.ts src/tools/registrations.ts src/tools/dispatch.ts
+git commit -m "feat(tools): wire 6 new todo MCP tools (get/create/update/complete/uncomplete/reposition)"
+```
+
+---
+
+### Task 3b.2: New handler module — `src/tools/handlers/todolists.ts` + 3 tools
+
+**Tools added:** `get_todolist`, `create_todolist`, `update_todolist`.
+
+**Files:** Create `src/tools/handlers/todolists.ts`, `src/test/tools/handlers/todolists.test.ts`. Modify `src/tools/registrations.ts` and `src/tools/dispatch.ts`.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/tools/handlers/todolists.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { handlers } from '../../../tools/handlers/todolists.js';
+import type { BasecampClient } from '../../../lib/basecamp-client.js';
+
+function makeMockClient(): BasecampClient {
+  return {
+    getTodolist: vi.fn(),
+    createTodolist: vi.fn(),
+    updateTodolist: vi.fn(),
+  } as unknown as BasecampClient;
+}
+
+const parse = (r: any) => JSON.parse(r.content[0].text);
+
+describe('todolists handlers', () => {
+  it('get_todolist: forwards (project_id, todolist_id)', async () => {
+    const c = makeMockClient();
+    (c.getTodolist as any).mockResolvedValue({ id: '50', name: 'List' });
+    const r = await handlers.get_todolist({ project_id: '100', todolist_id: '50' }, c);
+    expect(c.getTodolist).toHaveBeenCalledWith('100', '50');
+    expect(parse(r).todolist.name).toBe('List');
+  });
+
+  it('create_todolist: forwards body', async () => {
+    const c = makeMockClient();
+    (c.createTodolist as any).mockResolvedValue({ id: '50', name: 'New' });
+    await handlers.create_todolist(
+      { project_id: '100', todoset_id: '5', name: 'New', description: '<em>x</em>' }, c,
+    );
+    expect(c.createTodolist).toHaveBeenCalledWith('100', '5', {
+      name: 'New', description: '<em>x</em>',
+    });
+  });
+
+  it('update_todolist: forwards patch', async () => {
+    const c = makeMockClient();
+    (c.updateTodolist as any).mockResolvedValue({ id: '50', name: 'Renamed' });
+    await handlers.update_todolist({ project_id: '100', todolist_id: '50', name: 'Renamed' }, c);
+    expect(c.updateTodolist).toHaveBeenCalledWith('100', '50', { name: 'Renamed' });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/tools/handlers/todolists.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the handler module**
+
+Create `src/tools/handlers/todolists.ts`:
+
+```ts
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+import { successResult, type MCPToolResultEnvelope } from '../result.js';
+
+async function getTodolist(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const todolist = await c.getTodolist(args.project_id, args.todolist_id);
+  return successResult({ todolist });
+}
+
+async function createTodolist(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const todolist = await c.createTodolist(args.project_id, args.todoset_id, {
+    name: args.name,
+    description: args.description,
+  });
+  return successResult({ todolist, message: `Todo list '${args.name}' created` });
+}
+
+async function updateTodolist(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const { project_id, todolist_id, ...patch } = args;
+  const todolist = await c.updateTodolist(project_id, todolist_id, patch);
+  return successResult({ todolist, message: 'Todo list updated' });
+}
+
+export const handlers = {
+  get_todolist: getTodolist,
+  create_todolist: createTodolist,
+  update_todolist: updateTodolist,
+} as const;
+```
+
+- [ ] **Step 4: Add the 3 tool registrations**
+
+Append to `src/tools/registrations.ts`:
+
+```ts
+{
+  name: 'get_todolist',
+  description: 'Get a single todo list by ID',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todolist_id: { type: 'string', description: 'The todo list ID' },
+    },
+    required: ['project_id', 'todolist_id'],
+  },
+},
+{
+  name: 'create_todolist',
+  description: 'Create a new todo list under a project\'s todo set',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todoset_id: { type: 'string', description: 'The todo set ID (the project\'s todo set, see project.dock for entry name=todoset)' },
+      name: { type: 'string', description: 'The todo list name (required)' },
+      description: { type: 'string', description: 'Optional rich-text description (HTML)' },
+    },
+    required: ['project_id', 'todoset_id', 'name'],
+  },
+},
+{
+  name: 'update_todolist',
+  description: 'Update name or description of a todo list. Omitted fields are preserved (fetch-then-merge).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todolist_id: { type: 'string', description: 'The todo list ID' },
+      name: { type: 'string', description: 'New name' },
+      description: { type: 'string', description: 'New rich-text description (HTML)' },
+    },
+    required: ['project_id', 'todolist_id'],
+  },
+},
+```
+
+- [ ] **Step 5: Add import + spread to `dispatch.ts`**
+
+```ts
+import { handlers as todolists } from './handlers/todolists.js';
+// ...
+const ALL_HANDLERS: Record<string, Handler> = {
+  ...cards, ...columns, ...documents, ...webhooks, ...misc, ...todos, ...todolists,
+};
+```
+
+- [ ] **Step 6: Run test to verify it passes**
+
+Run: `npx vitest run src/test/tools/handlers/todolists.test.ts`
+Expected: PASS — 3 tests green.
+
+- [ ] **Step 7: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/tools/handlers/todolists.ts src/test/tools/handlers/todolists.test.ts src/tools/registrations.ts src/tools/dispatch.ts
+git commit -m "feat(tools): wire 3 new todolist MCP tools"
+```
+
+---
+
+### Task 3b.3: New handler module — `src/tools/handlers/comments.ts` + 3 tools
+
+**Tools added:** `get_comment`, `create_comment`, `update_comment`.
+
+**Files:** Create `src/tools/handlers/comments.ts`, `src/test/tools/handlers/comments.test.ts`. Modify `src/tools/registrations.ts` and `src/tools/dispatch.ts`.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/tools/handlers/comments.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { handlers } from '../../../tools/handlers/comments.js';
+import type { BasecampClient } from '../../../lib/basecamp-client.js';
+
+function makeMockClient(): BasecampClient {
+  return {
+    getComment: vi.fn(),
+    createComment: vi.fn(),
+    updateComment: vi.fn(),
+  } as unknown as BasecampClient;
+}
+
+const parse = (r: any) => JSON.parse(r.content[0].text);
+
+describe('comments handlers', () => {
+  it('get_comment: forwards (project_id, comment_id)', async () => {
+    const c = makeMockClient();
+    (c.getComment as any).mockResolvedValue({ id: '7', content: 'hi' });
+    const r = await handlers.get_comment({ project_id: '100', comment_id: '7' }, c);
+    expect(c.getComment).toHaveBeenCalledWith('100', '7');
+    expect(parse(r).comment.id).toBe('7');
+  });
+
+  it('create_comment: forwards body', async () => {
+    const c = makeMockClient();
+    (c.createComment as any).mockResolvedValue({ id: '7', content: 'hello' });
+    await handlers.create_comment(
+      { project_id: '100', recording_id: '500', content: '<div>hello</div>' }, c,
+    );
+    expect(c.createComment).toHaveBeenCalledWith('100', '500', { content: '<div>hello</div>' });
+  });
+
+  it('update_comment: forwards patch', async () => {
+    const c = makeMockClient();
+    (c.updateComment as any).mockResolvedValue({ id: '7', content: 'updated' });
+    await handlers.update_comment({ project_id: '100', comment_id: '7', content: 'updated' }, c);
+    expect(c.updateComment).toHaveBeenCalledWith('100', '7', { content: 'updated' });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/tools/handlers/comments.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the handler module**
+
+Create `src/tools/handlers/comments.ts`:
+
+```ts
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+import { successResult, type MCPToolResultEnvelope } from '../result.js';
+
+async function getComment(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const comment = await c.getComment(args.project_id, args.comment_id);
+  return successResult({ comment });
+}
+
+async function createComment(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const comment = await c.createComment(args.project_id, args.recording_id, { content: args.content });
+  return successResult({ comment, message: 'Comment posted' });
+}
+
+async function updateComment(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const { project_id, comment_id, ...patch } = args;
+  const comment = await c.updateComment(project_id, comment_id, patch);
+  return successResult({ comment, message: 'Comment updated' });
+}
+
+export const handlers = {
+  get_comment: getComment,
+  create_comment: createComment,
+  update_comment: updateComment,
+} as const;
+```
+
+- [ ] **Step 4: Add the 3 tool registrations**
+
+Append to `src/tools/registrations.ts`:
+
+```ts
+{
+  name: 'get_comment',
+  description: 'Get a single comment by ID',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      comment_id: { type: 'string', description: 'The comment ID' },
+    },
+    required: ['project_id', 'comment_id'],
+  },
+},
+{
+  name: 'create_comment',
+  description: 'Post a comment on a Basecamp recording (todo, message, document, card, etc.)',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      recording_id: { type: 'string', description: 'The recording (target item) ID — todo, message, document, card, etc.' },
+      content: { type: 'string', description: 'Comment body — HTML allowed (see BC3 rich-text guide)' },
+    },
+    required: ['project_id', 'recording_id', 'content'],
+  },
+},
+{
+  name: 'update_comment',
+  description: 'Update the content of an existing comment. Partial PUT — single field; no merge needed.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      comment_id: { type: 'string', description: 'The comment ID' },
+      content: { type: 'string', description: 'New comment body (HTML)' },
+    },
+    required: ['project_id', 'comment_id'],
+  },
+},
+```
+
+- [ ] **Step 5: Add import + spread to `dispatch.ts`**
+
+```ts
+import { handlers as comments } from './handlers/comments.js';
+// ...
+const ALL_HANDLERS: Record<string, Handler> = {
+  ...cards, ...columns, ...documents, ...webhooks, ...misc,
+  ...todos, ...todolists, ...comments,
+};
+```
+
+- [ ] **Step 6: Run test to verify it passes**
+
+Run: `npx vitest run src/test/tools/handlers/comments.test.ts`
+Expected: PASS — 3 tests green.
+
+- [ ] **Step 7: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/tools/handlers/comments.ts src/test/tools/handlers/comments.test.ts src/tools/registrations.ts src/tools/dispatch.ts
+git commit -m "feat(tools): wire 3 new comment MCP tools"
+```
+
+---
+
+### Task 3b.4: New handler module — `src/tools/handlers/recording-status.ts` + 5 tools
+
+**Tools added:** `set_todo_status`, `set_todolist_status`, `set_message_status`, `set_comment_status`, `set_schedule_entry_status`. All five dispatch to `client.setRecordingStatus(project_id, recording_id, status)`. Per spec §2.6 the per-resource framing is a UX hint, not enforcement — every handler is one line.
+
+**Files:** Create `src/tools/handlers/recording-status.ts`, `src/test/tools/handlers/recording-status.test.ts`. Modify `src/tools/registrations.ts` and `src/tools/dispatch.ts`.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/tools/handlers/recording-status.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { handlers } from '../../../tools/handlers/recording-status.js';
+import type { BasecampClient } from '../../../lib/basecamp-client.js';
+
+function makeMockClient(): BasecampClient {
+  return { setRecordingStatus: vi.fn() } as unknown as BasecampClient;
+}
+
+const parse = (r: any) => JSON.parse(r.content[0].text);
+
+describe('recording-status handlers', () => {
+  const cases: Array<{ tool: keyof typeof handlers; idArg: string }> = [
+    { tool: 'set_todo_status',           idArg: 'todo_id' },
+    { tool: 'set_todolist_status',       idArg: 'todolist_id' },
+    { tool: 'set_message_status',        idArg: 'message_id' },
+    { tool: 'set_comment_status',        idArg: 'comment_id' },
+    { tool: 'set_schedule_entry_status', idArg: 'entry_id' },
+  ];
+
+  for (const { tool, idArg } of cases) {
+    it(`${tool}: forwards (project_id, ${idArg}, status)`, async () => {
+      const c = makeMockClient();
+      (c.setRecordingStatus as any).mockResolvedValue(undefined);
+      const args: Record<string, any> = { project_id: '100', status: 'trashed' };
+      args[idArg] = '7';
+      const r = await handlers[tool](args, c);
+      expect(c.setRecordingStatus).toHaveBeenCalledWith('100', '7', 'trashed');
+      expect(parse(r).status).toBe('success');
+    });
+  }
+
+  it('idempotent: a second trashed call also succeeds', async () => {
+    const c = makeMockClient();
+    (c.setRecordingStatus as any).mockResolvedValue(undefined);
+    await handlers.set_todo_status({ project_id: '100', todo_id: '7', status: 'trashed' }, c);
+    await handlers.set_todo_status({ project_id: '100', todo_id: '7', status: 'trashed' }, c);
+    expect(c.setRecordingStatus).toHaveBeenCalledTimes(2);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/tools/handlers/recording-status.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the handler module**
+
+Create `src/tools/handlers/recording-status.ts`:
+
+```ts
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+import { successResult, type MCPToolResultEnvelope } from '../result.js';
+import type { RecordingStatus } from '../../types/basecamp.js';
+
+function makeStatusHandler(idKey: string) {
+  return async function setStatus(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+    const recordingId = args[idKey];
+    const status = args.status as RecordingStatus;
+    await c.setRecordingStatus(args.project_id, recordingId, status);
+    return successResult({ message: `Status set to ${status}` });
+  };
+}
+
+export const handlers = {
+  set_todo_status:           makeStatusHandler('todo_id'),
+  set_todolist_status:       makeStatusHandler('todolist_id'),
+  set_message_status:        makeStatusHandler('message_id'),
+  set_comment_status:        makeStatusHandler('comment_id'),
+  set_schedule_entry_status: makeStatusHandler('entry_id'),
+} as const;
+```
+
+- [ ] **Step 4: Add the 5 tool registrations (inlined explicitly)**
+
+Append all five to `src/tools/registrations.ts` exactly as written below — do not condense or template these out at execution time. The mechanical similarity makes typos easy to overlook; spelling them out keeps the registration array self-evident:
+
+```ts
+{
+  name: 'set_todo_status',
+  description: 'Set the status of a todo to active, archived, or trashed. Idempotent — safe to call repeatedly.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      todo_id:    { type: 'string', description: 'The todo ID' },
+      status:     { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+    },
+    required: ['project_id', 'todo_id', 'status'],
+  },
+},
+{
+  name: 'set_todolist_status',
+  description: 'Set the status of a todo list to active, archived, or trashed. Idempotent.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id:   { type: 'string', description: 'The project ID' },
+      todolist_id:  { type: 'string', description: 'The todo list ID' },
+      status:       { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+    },
+    required: ['project_id', 'todolist_id', 'status'],
+  },
+},
+{
+  name: 'set_message_status',
+  description: 'Set the status of a message to active, archived, or trashed. Idempotent.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      message_id: { type: 'string', description: 'The message ID' },
+      status:     { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+    },
+    required: ['project_id', 'message_id', 'status'],
+  },
+},
+{
+  name: 'set_comment_status',
+  description: 'Set the status of a comment to active, archived, or trashed. Idempotent.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      comment_id: { type: 'string', description: 'The comment ID' },
+      status:     { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+    },
+    required: ['project_id', 'comment_id', 'status'],
+  },
+},
+{
+  name: 'set_schedule_entry_status',
+  description: 'Set the status of a schedule entry to active, archived, or trashed. Idempotent.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      entry_id:   { type: 'string', description: 'The schedule entry ID' },
+      status:     { type: 'string', enum: ['active', 'archived', 'trashed'], description: 'New status' },
+    },
+    required: ['project_id', 'entry_id', 'status'],
+  },
+},
+```
+
+- [ ] **Step 5: Add import + spread to `dispatch.ts`**
+
+```ts
+import { handlers as recordingStatus } from './handlers/recording-status.js';
+// ...
+const ALL_HANDLERS: Record<string, Handler> = {
+  ...cards, ...columns, ...documents, ...webhooks, ...misc,
+  ...todos, ...todolists, ...comments, ...recordingStatus,
+};
+```
+
+- [ ] **Step 6: Run test to verify it passes**
+
+Run: `npx vitest run src/test/tools/handlers/recording-status.test.ts`
+Expected: PASS — 6 tests green (5 per-resource + 1 idempotency).
+
+- [ ] **Step 7: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/tools/handlers/recording-status.ts src/test/tools/handlers/recording-status.test.ts src/tools/registrations.ts src/tools/dispatch.ts
+git commit -m "feat(tools): wire 5 set_*_status MCP tools (trash/archive/unarchive)"
+```
+
+---
+
+### Task 3b.5: Verify Chunk 3b
+
+- [ ] **Step 1: Run the full test suite**
+
+Run: `npm test`
+Expected: PASS — every test green. New tests added in Chunk 3b: 6 todos + 3 todolists + 3 comments + 6 recording-status = 18 new handler-dispatch tests.
+
+- [ ] **Step 2: Run the build**
+
+Run: `npm run build`
+Expected: No type errors.
+
+- [ ] **Step 3: Confirm registrations match handlers (manual eyeball — required)**
+
+The grep heuristics below are convenience aids, not the source of truth. The authoritative check is to **read** `src/tools/registrations.ts` (every `name: '...'` entry) and `src/tools/dispatch.ts`'s `ALL_HANDLERS` spread (every key reachable through every imported `handlers` map), then visually confirm the two sets are identical.
+
+Convenience aids (run, but verify manually if they output anything surprising):
+
+```bash
+# Print every registered tool name, sorted unique:
+grep -E "name: '[a-z_]+'" src/tools/registrations.ts \
+  | sed -E "s/.*name: '([a-z_]+)'.*/\1/" \
+  | sort -u
+```
+
+```bash
+# Print every key in every handlers/*.ts export map, sorted unique:
+node -e "
+  import('./dist/tools/dispatch.js').then(d => {
+    // Re-export ALL_HANDLERS as a side-channel just for this check, OR
+    // walk the imports manually. If you didn't export ALL_HANDLERS,
+    // do the grep below instead.
+  });
+"
+# Fallback: grep approach
+grep -oE "^\\s*[a-z_]+:\\s" src/tools/handlers/*.ts \
+  | sed -E 's/.*:([a-z_]+):.*/\1/' \
+  | sort -u
+```
+
+Read both lists side-by-side. Every registered tool MUST appear as a handler key (otherwise it returns `Unknown tool` at runtime). Every handler key MUST appear as a registered tool (otherwise it's dead code). Treat any discrepancy as a blocker.
+
+- [ ] **Step 4: Confirm file sizes**
+
+Run: `wc -l src/tools/handlers/*.ts src/tools/dispatch.ts src/tools/registrations.ts`
+Expected: Every handler file under 200 lines; `dispatch.ts` under 100; `registrations.ts` is allowed to be larger (it's a data array).
+
+- [ ] **Step 5: Confirm git history**
+
+Run: `git log --oneline -4`
+Expected: 4 new commits from Chunk 3b (todos / todolists / comments / recording-status), conventional-commit form.
+
+End of Chunk 3b.
