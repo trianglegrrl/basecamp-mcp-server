@@ -30,6 +30,10 @@ import type {
   CommentUpdateBody,
   CreateMessageInput,
   MessageUpdateBody,
+  Schedule,
+  ScheduleEntry,
+  ScheduleEntryCreateBody,
+  ScheduleEntryUpdateBody,
 } from '../types/basecamp.js';
 import { parseNextLink } from './pagination.js';
 import { getDockEntryWithDetails } from './resources/dock.js';
@@ -37,6 +41,7 @@ import * as todosResource from './resources/todos.js';
 import * as todolistsResource from './resources/todolists.js';
 import * as commentsResource from './resources/comments.js';
 import * as messagesResource from './resources/messages.js';
+import * as scheduleResource from './resources/schedule.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -593,6 +598,34 @@ export class BasecampClient {
     patch: MessageUpdateBody,
   ): Promise<Message> {
     return messagesResource.updateMessage(this.client, projectId, messageId, patch);
+  }
+
+  async getSchedule(projectId: string): Promise<Schedule> {
+    return scheduleResource.getSchedule(this.client, projectId);
+  }
+
+  async getScheduleEntries(projectId: string, scheduleId: string): Promise<ScheduleEntry[]> {
+    return scheduleResource.getScheduleEntries(this.client, projectId, scheduleId);
+  }
+
+  async getScheduleEntry(projectId: string, entryId: string): Promise<ScheduleEntry> {
+    return scheduleResource.getScheduleEntry(this.client, projectId, entryId);
+  }
+
+  async createScheduleEntry(
+    projectId: string,
+    scheduleId: string,
+    body: ScheduleEntryCreateBody,
+  ): Promise<ScheduleEntry> {
+    return scheduleResource.createScheduleEntry(this.client, projectId, scheduleId, body);
+  }
+
+  async updateScheduleEntry(
+    projectId: string,
+    entryId: string,
+    patch: ScheduleEntryUpdateBody,
+  ): Promise<ScheduleEntry> {
+    return scheduleResource.updateScheduleEntry(this.client, projectId, entryId, patch);
   }
 
   // Document methods
