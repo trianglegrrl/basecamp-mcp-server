@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { bootstrapLive, type LiveContext } from './_setup.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { bootstrapLive, afterAllLiveTests, type LiveContext } from './_setup.js';
 
 let ctx: LiveContext;
 let parentTodoId: string;
@@ -27,6 +27,10 @@ beforeAll(async () => {
   });
   parentTodoId = String((parentTodo as any).id);
   ctx.store.record({ recording_id: parentTodoId, type: 'Todo', project_id: ctx.projectId });
+});
+
+afterAll(async () => {
+  if (ctx) await afterAllLiveTests(ctx);
 });
 
 describe('comments lifecycle (LIVE)', () => {

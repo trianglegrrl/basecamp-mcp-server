@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { bootstrapLive, type LiveContext } from './_setup.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { bootstrapLive, afterAllLiveTests, type LiveContext } from './_setup.js';
 
 let ctx: LiveContext;
 let messageBoardId: string;
@@ -8,6 +8,10 @@ beforeAll(async () => {
   ctx = await bootstrapLive();
   const board = await ctx.client.getMessageBoard(ctx.projectId);
   messageBoardId = String((board as any).id);
+});
+
+afterAll(async () => {
+  if (ctx) await afterAllLiveTests(ctx);
 });
 
 describe('messages lifecycle (LIVE)', () => {

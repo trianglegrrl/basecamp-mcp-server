@@ -36,7 +36,7 @@ import type {
   ScheduleEntryUpdateBody,
   RecordingStatus,
 } from '../types/basecamp.js';
-import { parseNextLink } from './pagination.js';
+import { parseNextLink, walkPaginated } from './pagination.js';
 import { getDockEntryWithDetails } from './resources/dock.js';
 import * as todosResource from './resources/todos.js';
 import * as todolistsResource from './resources/todolists.js';
@@ -283,6 +283,21 @@ export class BasecampClient {
       response = await this.client.get(next);
     }
     return all;
+  }
+
+  async getRecordings(opts: {
+    type: string;
+    bucket?: string;
+    status?: 'active' | 'archived' | 'trashed';
+  }): Promise<any[]> {
+    const params: Record<string, string> = { type: opts.type };
+    if (opts.bucket) params.bucket = opts.bucket;
+    if (opts.status) params.status = opts.status;
+    return walkPaginated(
+      (url, config) => this.client.get(url, config as any),
+      '/projects/recordings.json',
+      { params },
+    );
   }
 
   async findAssignmentsForPerson(opts: {

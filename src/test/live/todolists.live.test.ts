@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { bootstrapLive, type LiveContext } from './_setup.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { bootstrapLive, afterAllLiveTests, type LiveContext } from './_setup.js';
 
 let ctx: LiveContext;
 let todosetId: string;
@@ -10,6 +10,10 @@ beforeAll(async () => {
   const todoset = project.dock.find((d: any) => d.name === 'todoset');
   if (!todoset) throw new Error('Sandbox project has no todoset.');
   todosetId = String(todoset.id);
+});
+
+afterAll(async () => {
+  if (ctx) await afterAllLiveTests(ctx);
 });
 
 describe('todolists lifecycle (LIVE)', () => {

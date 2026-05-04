@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { bootstrapLive, type LiveContext } from './_setup.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { bootstrapLive, afterAllLiveTests, type LiveContext } from './_setup.js';
 
 let ctx: LiveContext;
 let scheduleId: string;
@@ -10,6 +10,10 @@ beforeAll(async () => {
   ctx = await bootstrapLive();
   const schedule = await ctx.client.getSchedule(ctx.projectId);
   scheduleId = String((schedule as any).id);
+});
+
+afterAll(async () => {
+  if (ctx) await afterAllLiveTests(ctx);
 });
 
 describe('schedule lifecycle (LIVE)', () => {
