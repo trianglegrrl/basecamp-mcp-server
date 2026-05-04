@@ -3821,3 +3821,556 @@ Run: `git log --oneline -4`
 Expected: 4 new commits from Chunk 3b (todos / todolists / comments / recording-status), conventional-commit form.
 
 End of Chunk 3b.
+
+---
+
+## Chunk 3c: New tool handlers — messages, schedule
+
+This chunk wires up the final 10 of the 27 new MCP tools (messages: 5, schedule: 5). Same patterns as Chunk 3b.
+
+**Hard dependency:** Chunk 2b (messages and schedule resource methods) and Chunk 3a (handler scaffolding) must land before this chunk.
+
+### Task 3c.1: New handler module — `src/tools/handlers/messages.ts` + 5 tools
+
+**Tools added:** `get_message_board`, `get_messages`, `get_message`, `create_message`, `update_message`.
+
+**Files:** Create `src/tools/handlers/messages.ts`, `src/test/tools/handlers/messages.test.ts`. Modify `src/tools/registrations.ts` and `src/tools/dispatch.ts`.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/tools/handlers/messages.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { handlers } from '../../../tools/handlers/messages.js';
+import type { BasecampClient } from '../../../lib/basecamp-client.js';
+
+function makeMockClient(): BasecampClient {
+  return {
+    getMessageBoard: vi.fn(),
+    getMessages: vi.fn(),
+    getMessage: vi.fn(),
+    createMessage: vi.fn(),
+    updateMessage: vi.fn(),
+  } as unknown as BasecampClient;
+}
+
+const parse = (r: any) => JSON.parse(r.content[0].text);
+
+describe('messages handlers', () => {
+  it('get_message_board: forwards (project_id)', async () => {
+    const c = makeMockClient();
+    (c.getMessageBoard as any).mockResolvedValue({ id: '999', title: 'Board' });
+    const r = await handlers.get_message_board({ project_id: '100' }, c);
+    expect(c.getMessageBoard).toHaveBeenCalledWith('100');
+    expect(parse(r).message_board.title).toBe('Board');
+  });
+
+  it('get_messages: forwards (project_id, message_board_id) and includes count', async () => {
+    const c = makeMockClient();
+    (c.getMessages as any).mockResolvedValue([{ id: '1' }, { id: '2' }]);
+    const r = await handlers.get_messages({ project_id: '100', message_board_id: '999' }, c);
+    expect(c.getMessages).toHaveBeenCalledWith('100', '999');
+    expect(parse(r).count).toBe(2);
+  });
+
+  it('get_message: forwards (project_id, message_id)', async () => {
+    const c = makeMockClient();
+    (c.getMessage as any).mockResolvedValue({ id: '1', subject: 'Hi' });
+    const r = await handlers.get_message({ project_id: '100', message_id: '1' }, c);
+    expect(c.getMessage).toHaveBeenCalledWith('100', '1');
+    expect(parse(r).message.subject).toBe('Hi');
+  });
+
+  it('create_message: forwards body (without status, which the resource layer adds)', async () => {
+    const c = makeMockClient();
+    (c.createMessage as any).mockResolvedValue({ id: '1', subject: 'Hi' });
+    await handlers.create_message({
+      project_id: '100',
+      message_board_id: '999',
+      subject: 'Hi',
+      content: '<div>Hello</div>',
+      category_id: 7,
+      subscriptions: [10, 20],
+    }, c);
+    expect(c.createMessage).toHaveBeenCalledWith('100', '999', {
+      subject: 'Hi',
+      content: '<div>Hello</div>',
+      category_id: 7,
+      subscriptions: [10, 20],
+    });
+  });
+
+  it('update_message: forwards patch only', async () => {
+    const c = makeMockClient();
+    (c.updateMessage as any).mockResolvedValue({ id: '1', subject: 'New' });
+    await handlers.update_message({
+      project_id: '100', message_id: '1', subject: 'New',
+    }, c);
+    expect(c.updateMessage).toHaveBeenCalledWith('100', '1', { subject: 'New' });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/tools/handlers/messages.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the handler module**
+
+Create `src/tools/handlers/messages.ts`:
+
+```ts
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+import { successResult, type MCPToolResultEnvelope } from '../result.js';
+
+async function getMessageBoard(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const message_board = await c.getMessageBoard(args.project_id);
+  return successResult({ message_board });
+}
+
+async function getMessages(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const messages = await c.getMessages(args.project_id, args.message_board_id);
+  return successResult({ messages, count: messages.length });
+}
+
+async function getMessage(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const message = await c.getMessage(args.project_id, args.message_id);
+  return successResult({ message });
+}
+
+async function createMessage(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const message = await c.createMessage(args.project_id, args.message_board_id, {
+    subject: args.subject,
+    content: args.content,
+    category_id: args.category_id,
+    subscriptions: args.subscriptions,
+  });
+  return successResult({ message, status_message: `Message '${args.subject}' posted` });
+}
+
+async function updateMessage(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const { project_id, message_id, ...patch } = args;
+  const message = await c.updateMessage(project_id, message_id, patch);
+  return successResult({ message, status_message: 'Message updated' });
+}
+
+export const handlers = {
+  get_message_board: getMessageBoard,
+  get_messages: getMessages,
+  get_message: getMessage,
+  create_message: createMessage,
+  update_message: updateMessage,
+} as const;
+```
+
+Note: `status_message` (not `message`) is used as the success-confirmation key because `message` is also the resource payload key — naming collision avoided.
+
+- [ ] **Step 4: Add the 5 tool registrations**
+
+Append to `src/tools/registrations.ts`:
+
+```ts
+{
+  name: 'get_message_board',
+  description: 'Get the message board for a project (each project has exactly one)',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+    },
+    required: ['project_id'],
+  },
+},
+{
+  name: 'get_messages',
+  description: 'List messages on a message board',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id:       { type: 'string', description: 'The project ID' },
+      message_board_id: { type: 'string', description: 'The message board ID (see get_message_board)' },
+    },
+    required: ['project_id', 'message_board_id'],
+  },
+},
+{
+  name: 'get_message',
+  description: 'Get a single message by ID',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      message_id: { type: 'string', description: 'The message ID' },
+    },
+    required: ['project_id', 'message_id'],
+  },
+},
+{
+  name: 'create_message',
+  description: 'Post a new message to a message board. Always published immediately (no draft state exposed).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id:       { type: 'string', description: 'The project ID' },
+      message_board_id: { type: 'string', description: 'The message board ID (see get_message_board)' },
+      subject:          { type: 'string', description: 'Message title (required)' },
+      content:          { type: 'string', description: 'Optional message body — HTML allowed' },
+      category_id:      { type: ['string', 'number'], description: 'Optional message-type ID (see message_types endpoint)' },
+      subscriptions:    { type: 'array', items: { type: ['string', 'number'] }, description: 'Optional array of person IDs to notify and subscribe; default = all project members' },
+    },
+    required: ['project_id', 'message_board_id', 'subject'],
+  },
+},
+{
+  name: 'update_message',
+  description: 'Update fields on an existing message. Omitted fields are preserved (fetch-then-merge).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id:  { type: 'string', description: 'The project ID' },
+      message_id:  { type: 'string', description: 'The message ID' },
+      subject:     { type: 'string', description: 'New subject' },
+      content:     { type: 'string', description: 'New body (HTML)' },
+      category_id: { type: ['string', 'number'], description: 'New category ID' },
+    },
+    required: ['project_id', 'message_id'],
+  },
+},
+```
+
+- [ ] **Step 5: Add import + spread to `dispatch.ts`**
+
+```ts
+import { handlers as messages } from './handlers/messages.js';
+// ...
+const ALL_HANDLERS: Record<string, Handler> = {
+  ...cards, ...columns, ...documents, ...webhooks, ...misc,
+  ...todos, ...todolists, ...comments, ...recordingStatus, ...messages,
+};
+```
+
+- [ ] **Step 6: Run test to verify it passes**
+
+Run: `npx vitest run src/test/tools/handlers/messages.test.ts`
+Expected: PASS — 5 tests green.
+
+- [ ] **Step 7: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/tools/handlers/messages.ts src/test/tools/handlers/messages.test.ts src/tools/registrations.ts src/tools/dispatch.ts
+git commit -m "feat(tools): wire 5 new message MCP tools (board lookup + CRUD)"
+```
+
+---
+
+### Task 3c.2: New handler module — `src/tools/handlers/schedule.ts` + 5 tools
+
+**Tools added:** `get_schedule`, `get_schedule_entries`, `get_schedule_entry`, `create_schedule_entry`, `update_schedule_entry`.
+
+**Files:** Create `src/tools/handlers/schedule.ts`, `src/test/tools/handlers/schedule.test.ts`. Modify `src/tools/registrations.ts` and `src/tools/dispatch.ts`.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/tools/handlers/schedule.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { handlers } from '../../../tools/handlers/schedule.js';
+import type { BasecampClient } from '../../../lib/basecamp-client.js';
+
+function makeMockClient(): BasecampClient {
+  return {
+    getSchedule: vi.fn(),
+    getScheduleEntries: vi.fn(),
+    getScheduleEntry: vi.fn(),
+    createScheduleEntry: vi.fn(),
+    updateScheduleEntry: vi.fn(),
+  } as unknown as BasecampClient;
+}
+
+const parse = (r: any) => JSON.parse(r.content[0].text);
+
+describe('schedule handlers', () => {
+  it('get_schedule: forwards (project_id)', async () => {
+    const c = makeMockClient();
+    (c.getSchedule as any).mockResolvedValue({ id: '888', title: 'Schedule' });
+    const r = await handlers.get_schedule({ project_id: '100' }, c);
+    expect(c.getSchedule).toHaveBeenCalledWith('100');
+    expect(parse(r).schedule.title).toBe('Schedule');
+  });
+
+  it('get_schedule_entries: forwards (project_id, schedule_id) with count', async () => {
+    const c = makeMockClient();
+    (c.getScheduleEntries as any).mockResolvedValue([{ id: '1' }]);
+    const r = await handlers.get_schedule_entries({ project_id: '100', schedule_id: '888' }, c);
+    expect(c.getScheduleEntries).toHaveBeenCalledWith('100', '888');
+    expect(parse(r).count).toBe(1);
+  });
+
+  it('get_schedule_entry: forwards (project_id, entry_id)', async () => {
+    const c = makeMockClient();
+    (c.getScheduleEntry as any).mockResolvedValue({ id: '7', summary: 'Lunch' });
+    const r = await handlers.get_schedule_entry({ project_id: '100', entry_id: '7' }, c);
+    expect(c.getScheduleEntry).toHaveBeenCalledWith('100', '7');
+    expect(parse(r).schedule_entry.summary).toBe('Lunch');
+  });
+
+  it('create_schedule_entry: forwards body shape', async () => {
+    const c = makeMockClient();
+    (c.createScheduleEntry as any).mockResolvedValue({ id: '7', summary: 'Lunch' });
+    await handlers.create_schedule_entry({
+      project_id: '100',
+      schedule_id: '888',
+      summary: 'Lunch',
+      starts_at: '2026-06-01T12:00:00Z',
+      ends_at: '2026-06-01T13:00:00Z',
+      description: '<em>noms</em>',
+      participant_ids: [10],
+      all_day: false,
+      notify: true,
+    }, c);
+    expect(c.createScheduleEntry).toHaveBeenCalledWith('100', '888', {
+      summary: 'Lunch',
+      starts_at: '2026-06-01T12:00:00Z',
+      ends_at: '2026-06-01T13:00:00Z',
+      description: '<em>noms</em>',
+      participant_ids: [10],
+      all_day: false,
+      notify: true,
+    });
+  });
+
+  it('update_schedule_entry: forwards patch only', async () => {
+    const c = makeMockClient();
+    (c.updateScheduleEntry as any).mockResolvedValue({ id: '7', summary: 'Brunch' });
+    await handlers.update_schedule_entry({
+      project_id: '100', entry_id: '7', summary: 'Brunch',
+    }, c);
+    expect(c.updateScheduleEntry).toHaveBeenCalledWith('100', '7', { summary: 'Brunch' });
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run src/test/tools/handlers/schedule.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the handler module**
+
+Create `src/tools/handlers/schedule.ts`:
+
+```ts
+import type { BasecampClient } from '../../lib/basecamp-client.js';
+import { successResult, type MCPToolResultEnvelope } from '../result.js';
+
+async function getSchedule(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const schedule = await c.getSchedule(args.project_id);
+  return successResult({ schedule });
+}
+
+async function getScheduleEntries(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const entries = await c.getScheduleEntries(args.project_id, args.schedule_id);
+  return successResult({ schedule_entries: entries, count: entries.length });
+}
+
+async function getScheduleEntry(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const schedule_entry = await c.getScheduleEntry(args.project_id, args.entry_id);
+  return successResult({ schedule_entry });
+}
+
+async function createScheduleEntry(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const schedule_entry = await c.createScheduleEntry(args.project_id, args.schedule_id, {
+    summary: args.summary,
+    starts_at: args.starts_at,
+    ends_at: args.ends_at,
+    description: args.description,
+    participant_ids: args.participant_ids,
+    all_day: args.all_day,
+    notify: args.notify,
+  });
+  return successResult({ schedule_entry, message: `Schedule entry '${args.summary}' created` });
+}
+
+async function updateScheduleEntry(args: Record<string, any>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const { project_id, entry_id, ...patch } = args;
+  const schedule_entry = await c.updateScheduleEntry(project_id, entry_id, patch);
+  return successResult({ schedule_entry, message: 'Schedule entry updated' });
+}
+
+export const handlers = {
+  get_schedule: getSchedule,
+  get_schedule_entries: getScheduleEntries,
+  get_schedule_entry: getScheduleEntry,
+  create_schedule_entry: createScheduleEntry,
+  update_schedule_entry: updateScheduleEntry,
+} as const;
+```
+
+- [ ] **Step 4: Add the 5 tool registrations**
+
+Append to `src/tools/registrations.ts`:
+
+```ts
+{
+  name: 'get_schedule',
+  description: 'Get the schedule for a project (each project has exactly one)',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+    },
+    required: ['project_id'],
+  },
+},
+{
+  name: 'get_schedule_entries',
+  description: 'List schedule entries on a schedule',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id:  { type: 'string', description: 'The project ID' },
+      schedule_id: { type: 'string', description: 'The schedule ID (see get_schedule)' },
+    },
+    required: ['project_id', 'schedule_id'],
+  },
+},
+{
+  name: 'get_schedule_entry',
+  description: 'Get a single schedule entry by ID',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id: { type: 'string', description: 'The project ID' },
+      entry_id:   { type: 'string', description: 'The schedule entry ID' },
+    },
+    required: ['project_id', 'entry_id'],
+  },
+},
+{
+  name: 'create_schedule_entry',
+  description: 'Create a new schedule entry on a schedule',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id:      { type: 'string', description: 'The project ID' },
+      schedule_id:     { type: 'string', description: 'The schedule ID (see get_schedule)' },
+      summary:         { type: 'string', description: 'Entry summary/title (required)' },
+      starts_at:       { type: 'string', description: 'ISO 8601 start datetime (required) — for all-day events use YYYY-MM-DD' },
+      ends_at:         { type: 'string', description: 'ISO 8601 end datetime (required) — for all-day events use YYYY-MM-DD' },
+      description:     { type: 'string', description: 'Optional rich-text description (HTML)' },
+      participant_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Optional array of person IDs to invite' },
+      all_day:         { type: 'boolean', description: 'Whether this is an all-day event' },
+      notify:          { type: 'boolean', description: 'Whether to notify participants' },
+    },
+    required: ['project_id', 'schedule_id', 'summary', 'starts_at', 'ends_at'],
+  },
+},
+{
+  name: 'update_schedule_entry',
+  description: 'Update fields on an existing schedule entry. Omitted fields are preserved (fetch-then-merge).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      project_id:      { type: 'string', description: 'The project ID' },
+      entry_id:        { type: 'string', description: 'The schedule entry ID' },
+      summary:         { type: 'string' },
+      description:     { type: 'string' },
+      starts_at:       { type: 'string' },
+      ends_at:         { type: 'string' },
+      participant_ids: { type: 'array', items: { type: ['string', 'number'] } },
+      all_day:         { type: 'boolean' },
+      notify:          { type: 'boolean' },
+    },
+    required: ['project_id', 'entry_id'],
+  },
+},
+```
+
+- [ ] **Step 5: Add import + spread to `dispatch.ts`**
+
+```ts
+import { handlers as schedule } from './handlers/schedule.js';
+// ...
+const ALL_HANDLERS: Record<string, Handler> = {
+  ...cards, ...columns, ...documents, ...webhooks, ...misc,
+  ...todos, ...todolists, ...comments, ...recordingStatus, ...messages, ...schedule,
+};
+```
+
+- [ ] **Step 6: Run test to verify it passes**
+
+Run: `npx vitest run src/test/tools/handlers/schedule.test.ts`
+Expected: PASS — 5 tests green.
+
+- [ ] **Step 7: Run the full suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/tools/handlers/schedule.ts src/test/tools/handlers/schedule.test.ts src/tools/registrations.ts src/tools/dispatch.ts
+git commit -m "feat(tools): wire 5 new schedule MCP tools (schedule + entry CRUD)"
+```
+
+---
+
+### Task 3c.3: Verify Chunk 3c (and end-of-Chunk-3 milestone)
+
+This task verifies Chunk 3c specifically AND confirms the entire Chunk 3 (3a + 3b + 3c) milestone — every one of the 27 new MCP tools and 11 wire-up fixes is registered, dispatched, and covered by mocks.
+
+- [ ] **Step 1: Run the full test suite**
+
+Run: `npm test`
+Expected: PASS — 10 new handler-dispatch tests in Chunk 3c (5 messages + 5 schedule). Cumulative total: across Chunks 1, 2a, 2b, 3a, 3b, 3c we should now have all original tests plus ~120 new tests.
+
+- [ ] **Step 2: Run the build**
+
+Run: `npm run build`
+Expected: No type errors.
+
+- [ ] **Step 3: Confirm registration / handler parity (manual eyeball)**
+
+Same procedure as Task 3b.5 Step 3: print every `name: '...'` from `registrations.ts`, print every key from every `handlers/*.ts` export, eyeball that the two sets match.
+
+Expected counts (exact):
+- Registered tools = `(original 39) − (2 deleted in 3a: search_basecamp, global_search) + (27 new in 3a/3b/3c) = 64 names`.
+  - Original 39 = the count of registration objects in `src/index.ts` lines 110-602 before this work begins. If counting yields a different number, the constant adjusts; the *math* (−2 + 27) is what matters.
+- Handler keys: identical to the registered count.
+
+Verify by running both `wc -l` of unique tool names from each side and comparing the integers, then eyeballing the diff.
+
+- [ ] **Step 4: Confirm spec acceptance criteria from §7 are met**
+
+Walk the spec's `## 7. Acceptance criteria` checklist:
+
+- [ ] All 27 new tools registered, dispatched, with mock test coverage. Verified by Steps 1-3 above.
+- [ ] All 11 wire-up fixes turn previously-broken `Unknown tool` calls into working dispatches with mock test coverage. Verified by Chunk 3a Task 3a.4 Step 1 (those tests landed there).
+- [ ] `update-merge.ts` has its own focused test file. Verified by Chunk 1 Task 1.4.
+- [ ] `getDockEntryWithDetails` is the single source of dock-entry-with-details lookups. Verified by Chunk 1 Task 1.5 + Chunk 2b Tasks 2b.1 (messages) and 2b.2 (schedule).
+- [ ] `npm test` passes. Step 1 above.
+- [ ] No file in `src/` exceeds 800 lines, no handler file exceeds 400 soft cap.
+
+  Run: `find src -name '*.ts' -not -path '*/node_modules/*' -exec wc -l {} \; | sort -rn | head -10`
+  Expected: top file under 800; every `handlers/*.ts` under 400.
+
+- [ ] No `as T` casts in merge-helper return type or call sites. Run: `grep -rE "as T(Body|Resource|Update|Create)" src/lib/ src/tools/`. Expected: only the one local `existing as unknown as TBody` cast inside `update-merge.ts`. Anything else is a regression.
+- [ ] `npm run build` (tsc) passes. Step 2 above.
+
+**Deferred to Chunk 4 (do not flag as missing here):** The two live-test acceptance criteria from spec §7 — `npm run test:live` and `npm run test:live:cleanup` — are explicitly out of scope for Chunk 3. Chunk 4 builds the live-test infrastructure, sandbox guards, and cleanup tooling. End-of-Chunk-4 verification will close those criteria.
+
+- [ ] **Step 5: Confirm git history**
+
+Run: `git log --oneline -2`
+Expected: 2 new commits from Chunk 3c (messages / schedule).
+
+End of Chunk 3c.
