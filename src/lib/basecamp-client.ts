@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import axios, { AxiosInstance, AxiosResponse, AxiosRequestConfig } from 'axios';
 import type {
   BasecampProject,
   TodoList,
@@ -290,11 +290,13 @@ export class BasecampClient {
     bucket?: string;
     status?: 'active' | 'archived' | 'trashed';
   }): Promise<any[]> {
+    // Recording shapes vary by `type`, so the element type is intentionally
+    // widened. Callers (e.g. live-leak-audit) narrow as needed.
     const params: Record<string, string> = { type: opts.type };
     if (opts.bucket) params.bucket = opts.bucket;
     if (opts.status) params.status = opts.status;
-    return walkPaginated(
-      (url, config) => this.client.get(url, config as any),
+    return walkPaginated<any>(
+      (url, config) => this.client.get(url, config as AxiosRequestConfig | undefined),
       '/projects/recordings.json',
       { params },
     );

@@ -4,10 +4,13 @@ export function parseNextLink(linkHeader?: string): string | null {
   return match ? match[1] : null;
 }
 
-type GetFn = (url: string, config?: unknown) => Promise<{ data: any; headers?: Record<string, any> }>;
+type GetFn<T> = (url: string, config?: unknown) => Promise<{
+  data: T | T[];
+  headers?: Record<string, string | undefined>;
+}>;
 
-export async function walkPaginated<T = any>(
-  get: GetFn,
+export async function walkPaginated<T>(
+  get: GetFn<T>,
   firstUrl: string,
   config?: unknown,
 ): Promise<T[]> {
@@ -15,9 +18,9 @@ export async function walkPaginated<T = any>(
   let response = config === undefined ? await get(firstUrl) : await get(firstUrl, config);
   while (true) {
     if (Array.isArray(response.data)) {
-      all.push(...(response.data as T[]));
+      all.push(...response.data);
     } else {
-      all.push(response.data as T);
+      all.push(response.data);
     }
     const linkHeader = response.headers?.link ?? response.headers?.Link;
     const next = parseNextLink(linkHeader);
