@@ -20,12 +20,13 @@ describe('successResult', () => {
 });
 
 describe('errorResult', () => {
-  it('wraps an error message as a JSON-encoded text content block', () => {
-    const result = errorResult('Something went wrong', { code: 'X' });
+  it('wraps an error message as a JSON-encoded text content block, requires an error category', () => {
+    const result = errorResult('Something went wrong', { error: 'execution', code: 'X' });
     expect(result.content).toHaveLength(1);
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse((result.content[0] as { text: string }).text);
     expect(parsed.status).toBe('error');
     expect(parsed.message).toBe('Something went wrong');
+    expect(parsed.error).toBe('execution');
     expect(parsed.code).toBe('X');
   });
 });

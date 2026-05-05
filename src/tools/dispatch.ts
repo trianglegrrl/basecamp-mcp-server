@@ -12,7 +12,7 @@ import { handlers as recordingStatus } from './handlers/recording-status.js';
 import { handlers as messages } from './handlers/messages.js';
 import { handlers as schedule } from './handlers/schedule.js';
 
-type Handler = (args: Record<string, any>, client: BasecampClient) => Promise<MCPToolResultEnvelope>;
+type Handler = (args: Record<string, unknown>, client: BasecampClient) => Promise<MCPToolResultEnvelope>;
 
 const ALL_HANDLERS: Record<string, Handler> = {
   ...cards,
@@ -28,27 +28,42 @@ const ALL_HANDLERS: Record<string, Handler> = {
   ...schedule,
 };
 
+interface AxiosLikeError {
+  response?: { status?: number; data?: { error?: unknown } };
+  message?: string;
+}
+
+function asAxiosLikeError(e: unknown): AxiosLikeError {
+  return (typeof e === 'object' && e !== null) ? (e as AxiosLikeError) : {};
+}
+
 export async function dispatch(
   name: string,
-  args: Record<string, any>,
+  args: Record<string, unknown>,
   client: BasecampClient,
 ): Promise<MCPToolResultEnvelope> {
   const handler = ALL_HANDLERS[name];
-  if (!handler) return errorResult(`Unknown tool: ${name}`);
+  if (!handler) return errorResult(`Unknown tool: ${name}`, { error: 'unknown_tool' });
   try {
     return await handler(args, client);
-  } catch (error: any) {
-    if (error.response?.status === 401 && error.response?.data?.error?.includes('expired')) {
-      return errorResult('Your Basecamp OAuth token has expired. Please re-authenticate: npm run auth', {
-        error: 'OAuth token expired',
-      });
+  } catch (raw: unknown) {
+    const error = asAxiosLikeError(raw);
+    const status = error.response?.status;
+    // Any 401 from BC3 is auth-related — don't fingerprint the message body
+    // (that string can change without notice and we'd silently downgrade
+    // the envelope to "Unknown error").
+    if (status === 401) {
+      return errorResult(
+        'Your Basecamp OAuth token is no longer valid. Please re-authenticate: npm run auth',
+        { error: 'auth.expired', status: 401 },
+      );
     }
-    if (error.response?.status === 422) {
-      return errorResult(error.response?.data?.error ?? error.message, {
-        error: 'Validation error',
-        status: 422,
-      });
+    if (status === 422) {
+      const message = typeof error.response?.data?.error === 'string'
+        ? error.response.data.error
+        : (error.message ?? 'Validation failed');
+      return errorResult(message, { error: 'validation', status: 422 });
     }
-    return errorResult(error.message ?? 'Unknown error', { error: 'Execution error' });
+    return errorResult(error.message ?? 'Unknown error', { error: 'execution' });
   }
 }
