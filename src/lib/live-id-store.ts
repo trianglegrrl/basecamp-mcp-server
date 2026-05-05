@@ -30,6 +30,10 @@ export function createIdStore(runId: string, dir: string): IdStore {
   return {
     runId,
     filePath,
+    // We re-read and rewrite the entire file on every record() so a process
+    // crash mid-write can only ever leave a complete prior snapshot or a
+    // complete new one — never a half-written JSON document the cleanup
+    // script can't parse. O(n²) over a run, fine at test scale (~10 records).
     record(entry) {
       const current: CapturedId[] = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
       current.push(entry);

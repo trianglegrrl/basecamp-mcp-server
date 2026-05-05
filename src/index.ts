@@ -12,6 +12,8 @@ import { config } from 'dotenv';
 import { BasecampClient } from './lib/basecamp-client.js';
 import { tokenStorage } from './lib/token-storage.js';
 import { projectPath } from './lib/paths.js';
+import { tools, dispatch } from './tools/index.js';
+import { errorResult } from './tools/result.js';
 
 // Load .env from the project root, not the launching process's cwd.
 // This matters because Claude Desktop / Cursor spawn the server from
@@ -88,22 +90,20 @@ class BasecampMCPServer {
 
   private setupHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const { tools } = await import('./tools/index.js');
       return { tools };
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { dispatch } = await import('./tools/index.js');
-      const { errorResult } = await import('./tools/result.js');
       let client: BasecampClient;
       try {
         client = await this.getBasecampClient();
-      } catch (error: any) {
-        return errorResult(error.message ?? 'Authentication required', { error: 'Authentication error' });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Authentication required';
+        return errorResult(message, { error: 'auth.required' });
       }
       return dispatch(
         request.params.name,
-        (request.params.arguments ?? {}) as Record<string, any>,
+        (request.params.arguments ?? {}) as Record<string, unknown>,
         client,
       );
     });

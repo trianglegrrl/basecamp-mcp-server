@@ -1,4 +1,4 @@
-import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { config } from 'dotenv';
 import { BasecampClient } from '../../lib/basecamp-client.js';
 import { tokenStorage } from '../../lib/token-storage.js';
@@ -33,7 +33,7 @@ export async function bootstrapLive(): Promise<LiveContext> {
   });
 
   const projectId = await assertSandbox(client);
-  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const runId = randomUUID();
   const store = createIdStore(runId, projectPath('.'));
   const prefix = `[mcp-test-${runId}]`;
 
