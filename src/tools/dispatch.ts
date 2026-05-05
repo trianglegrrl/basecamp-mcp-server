@@ -1,3 +1,4 @@
+import { ZodError } from 'zod';
 import type { BasecampClient } from '../lib/basecamp-client.js';
 import { errorResult, type MCPToolResultEnvelope } from './result.js';
 import { handlers as cards } from './handlers/cards.js';
@@ -47,6 +48,12 @@ export async function dispatch(
   try {
     return await handler(args, client);
   } catch (raw: unknown) {
+    if (raw instanceof ZodError) {
+      const message = raw.issues
+        .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+        .join('; ');
+      return errorResult(`Invalid arguments for ${name}: ${message}`, { error: 'validation' });
+    }
     const error = asAxiosLikeError(raw);
     const status = error.response?.status;
     // Any 401 from BC3 is auth-related — don't fingerprint the message body
