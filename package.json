@@ -1,7 +1,7 @@
 {
   "name": "basecamp-mcp-server",
   "version": "1.0.0",
-  "description": "Basecamp 3 MCP (Model Context Protocol) server - 46 tools for complete Basecamp integration",
+  "description": "Basecamp 3 MCP (Model Context Protocol) server - 65 tools with full read + write parity for Basecamp 3",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
