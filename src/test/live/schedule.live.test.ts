@@ -8,56 +8,70 @@ const ENDS_AT = '2026-12-31T16:00:00Z';
 
 beforeAll(async () => {
   ctx = await bootstrapLive();
-  const schedule = await ctx.client.getSchedule(ctx.projectId);
-  scheduleId = String((schedule as any).id);
+  const r = await ctx.call('get_schedule', { project_id: ctx.projectId });
+  const schedule = r.schedule as { id: string | number };
+  scheduleId = String(schedule.id);
 });
 
 afterAll(async () => {
   if (ctx) await afterAllLiveTests(ctx);
 });
 
-describe('schedule lifecycle (LIVE)', () => {
+describe('schedule lifecycle (LIVE, via dispatch)', () => {
   let entryId: string;
 
   it('create_schedule_entry: creates a prefixed entry and records its ID', async () => {
-    const created = await ctx.client.createScheduleEntry(ctx.projectId, scheduleId, {
+    const r = await ctx.call('create_schedule_entry', {
+      project_id: ctx.projectId,
+      schedule_id: scheduleId,
       summary: `${ctx.prefix} create-then-trash`,
       starts_at: STARTS_AT,
       ends_at: ENDS_AT,
       description: 'initial description',
     });
-    entryId = String((created as any).id);
+    const entry = r.schedule_entry as { id: string | number; summary: string };
+    entryId = String(entry.id);
     ctx.store.record({ recording_id: entryId, type: 'Schedule::Entry', project_id: ctx.projectId });
-    expect((created as any).summary).toContain(ctx.prefix);
+    expect(entry.summary).toContain(ctx.prefix);
   });
 
   it('get_schedule_entry: round-trips the created fields', async () => {
-    const fetched = await ctx.client.getScheduleEntry(ctx.projectId, entryId);
-    expect((fetched as any).summary).toContain(ctx.prefix);
+    const r = await ctx.call('get_schedule_entry', {
+      project_id: ctx.projectId, entry_id: entryId,
+    });
+    const entry = r.schedule_entry as { summary: string; starts_at: string; ends_at: string };
+    expect(entry.summary).toContain(ctx.prefix);
     // BC3 returns ISO datetimes with ms precision; parse both sides for tolerance.
-    expect(new Date((fetched as any).starts_at).getTime()).toBe(new Date(STARTS_AT).getTime());
-    expect(new Date((fetched as any).ends_at).getTime()).toBe(new Date(ENDS_AT).getTime());
+    expect(new Date(entry.starts_at).getTime()).toBe(new Date(STARTS_AT).getTime());
+    expect(new Date(entry.ends_at).getTime()).toBe(new Date(ENDS_AT).getTime());
   });
 
   it("update_schedule_entry: 'full' merge preserves times while changing summary", async () => {
-    await ctx.client.updateScheduleEntry(ctx.projectId, entryId, {
-      summary: `${ctx.prefix} updated summary`,
+    await ctx.call('update_schedule_entry', {
+      project_id: ctx.projectId, entry_id: entryId, summary: `${ctx.prefix} updated summary`,
     });
-    const fetched = await ctx.client.getScheduleEntry(ctx.projectId, entryId);
-    expect((fetched as any).summary).toContain('updated summary');
-    expect(new Date((fetched as any).starts_at).getTime()).toBe(new Date(STARTS_AT).getTime());
-    expect(new Date((fetched as any).ends_at).getTime()).toBe(new Date(ENDS_AT).getTime());
+    const r = await ctx.call('get_schedule_entry', {
+      project_id: ctx.projectId, entry_id: entryId,
+    });
+    const entry = r.schedule_entry as { summary: string; starts_at: string; ends_at: string };
+    expect(entry.summary).toContain('updated summary');
+    expect(new Date(entry.starts_at).getTime()).toBe(new Date(STARTS_AT).getTime());
+    expect(new Date(entry.ends_at).getTime()).toBe(new Date(ENDS_AT).getTime());
   });
 
   it('set_schedule_entry_status: trashed', async () => {
-    await ctx.client.setRecordingStatus(ctx.projectId, entryId, 'trashed');
-    const fetched = await ctx.client.getScheduleEntry(ctx.projectId, entryId);
-    expect((fetched as any).status).toBe('trashed');
+    await ctx.call('set_schedule_entry_status', {
+      project_id: ctx.projectId, entry_id: entryId, status: 'trashed',
+    });
+    const r = await ctx.call('get_schedule_entry', {
+      project_id: ctx.projectId, entry_id: entryId,
+    });
+    expect((r.schedule_entry as { status: string }).status).toBe('trashed');
   });
 
   it('set_schedule_entry_status: idempotent', async () => {
-    await expect(
-      ctx.client.setRecordingStatus(ctx.projectId, entryId, 'trashed'),
-    ).resolves.not.toThrow();
+    await expect(ctx.call('set_schedule_entry_status', {
+      project_id: ctx.projectId, entry_id: entryId, status: 'trashed',
+    })).resolves.toMatchObject({ status: 'success' });
   });
 });

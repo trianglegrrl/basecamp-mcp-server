@@ -6,6 +6,7 @@ import { assertSandbox } from '../../lib/live-sandbox-guard.js';
 import { createIdStore, deleteIdStore, type IdStore } from '../../lib/live-id-store.js';
 import { auditForLeaks } from '../../lib/live-leak-audit.js';
 import { projectPath } from '../../lib/paths.js';
+import { dispatch } from '../../tools/index.js';
 
 config({ path: projectPath('.env') });
 
@@ -15,6 +16,14 @@ export interface LiveContext {
   store: IdStore;
   runId: string;
   prefix: string;
+  /**
+   * Route a tool call through the actual MCP dispatch layer (zod
+   * validation + handler + envelope wrapping), then unwrap the
+   * success payload. Throws if dispatch returned an error envelope —
+   * the live tests are validating both the BC3 round trip AND that
+   * our MCP wiring matches what a real client would see.
+   */
+  call: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
 }
 
 export async function bootstrapLive(): Promise<LiveContext> {
@@ -37,7 +46,17 @@ export async function bootstrapLive(): Promise<LiveContext> {
   const store = createIdStore(runId, projectPath('.'));
   const prefix = `[mcp-test-${runId}]`;
 
-  return { client, projectId, store, runId, prefix };
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const envelope = await dispatch(name, args, client);
+    const text = (envelope.content[0] as { text: string }).text;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (parsed.status !== 'success') {
+      throw new Error(`dispatch(${name}) failed: ${JSON.stringify(parsed)}`);
+    }
+    return parsed;
+  };
+
+  return { client, projectId, store, runId, prefix, call };
 }
 
 export async function afterAllLiveTests(ctx: LiveContext): Promise<void> {

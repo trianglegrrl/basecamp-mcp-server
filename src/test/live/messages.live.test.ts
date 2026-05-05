@@ -6,51 +6,59 @@ let messageBoardId: string;
 
 beforeAll(async () => {
   ctx = await bootstrapLive();
-  const board = await ctx.client.getMessageBoard(ctx.projectId);
-  messageBoardId = String((board as any).id);
+  const r = await ctx.call('get_message_board', { project_id: ctx.projectId });
+  const board = r.message_board as { id: string | number };
+  messageBoardId = String(board.id);
 });
 
 afterAll(async () => {
   if (ctx) await afterAllLiveTests(ctx);
 });
 
-describe('messages lifecycle (LIVE)', () => {
+describe('messages lifecycle (LIVE, via dispatch)', () => {
   let messageId: string;
 
   it('create_message: posts a prefixed message and records its ID', async () => {
-    const created = await ctx.client.createMessage(ctx.projectId, messageBoardId, {
+    const r = await ctx.call('create_message', {
+      project_id: ctx.projectId,
+      message_board_id: messageBoardId,
       subject: `${ctx.prefix} create-then-trash`,
       content: '<div>initial body</div>',
     });
-    messageId = String((created as any).id);
+    const message = r.message as { id: string | number; subject: string };
+    messageId = String(message.id);
     ctx.store.record({ recording_id: messageId, type: 'Message', project_id: ctx.projectId });
-    expect((created as any).subject).toContain(ctx.prefix);
+    expect(message.subject).toContain(ctx.prefix);
   });
 
   it('get_message: round-trips the created fields', async () => {
-    const fetched = await ctx.client.getMessage(ctx.projectId, messageId);
-    expect((fetched as any).subject).toContain(ctx.prefix);
-    expect((fetched as any).content).toContain('initial body');
+    const r = await ctx.call('get_message', { project_id: ctx.projectId, message_id: messageId });
+    const message = r.message as { subject: string; content: string };
+    expect(message.subject).toContain(ctx.prefix);
+    expect(message.content).toContain('initial body');
   });
 
   it("update_message: 'full' merge preserves content while changing subject", async () => {
-    await ctx.client.updateMessage(ctx.projectId, messageId, {
-      subject: `${ctx.prefix} updated subject`,
+    await ctx.call('update_message', {
+      project_id: ctx.projectId, message_id: messageId, subject: `${ctx.prefix} updated subject`,
     });
-    const fetched = await ctx.client.getMessage(ctx.projectId, messageId);
-    expect((fetched as any).subject).toContain('updated subject');
-    expect((fetched as any).content).toContain('initial body');
+    const r = await ctx.call('get_message', { project_id: ctx.projectId, message_id: messageId });
+    const message = r.message as { subject: string; content: string };
+    expect(message.subject).toContain('updated subject');
+    expect(message.content).toContain('initial body');
   });
 
   it('set_message_status: trashed', async () => {
-    await ctx.client.setRecordingStatus(ctx.projectId, messageId, 'trashed');
-    const fetched = await ctx.client.getMessage(ctx.projectId, messageId);
-    expect((fetched as any).status).toBe('trashed');
+    await ctx.call('set_message_status', {
+      project_id: ctx.projectId, message_id: messageId, status: 'trashed',
+    });
+    const r = await ctx.call('get_message', { project_id: ctx.projectId, message_id: messageId });
+    expect((r.message as { status: string }).status).toBe('trashed');
   });
 
   it('set_message_status: idempotent', async () => {
-    await expect(
-      ctx.client.setRecordingStatus(ctx.projectId, messageId, 'trashed'),
-    ).resolves.not.toThrow();
+    await expect(ctx.call('set_message_status', {
+      project_id: ctx.projectId, message_id: messageId, status: 'trashed',
+    })).resolves.toMatchObject({ status: 'success' });
   });
 });
