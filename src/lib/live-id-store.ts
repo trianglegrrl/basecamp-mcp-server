@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { RecordingType } from './recording-types.js';
 
-export type RecordingType =
-  | 'Todo' | 'Todolist' | 'Message' | 'Comment' | 'Schedule::Entry';
+export type { RecordingType };
 
 export interface CapturedId {
   recording_id: string;
