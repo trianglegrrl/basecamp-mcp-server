@@ -1,7 +1,7 @@
 {
   "name": "basecamp-mcp-server",
   "version": "1.0.0",
-  "description": "Basecamp 3 MCP (Model Context Protocol) server - 46 tools for complete Basecamp integration",
+  "description": "Basecamp 3 MCP (Model Context Protocol) server - 65 tools with full read + write parity for Basecamp 3",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -16,6 +16,8 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "test:coverage-ui": "vitest --ui --coverage",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "test:live:cleanup": "tsx src/scripts/test-live-cleanup.ts",
     "setup": "tsx src/scripts/setup.ts",
     "auth": "tsx src/scripts/oauth-app.ts",
     "smoke": "node scripts/smoke.mjs",

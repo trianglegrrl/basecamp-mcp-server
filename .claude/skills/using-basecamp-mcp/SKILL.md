@@ -1,17 +1,19 @@
 ---
 name: using-basecamp-mcp
-description: Use when the user wants to query Basecamp 3 through this MCP server — find their own tasks, find someone else's tasks ("show me Jill's tasks due this week"), filter by due-date scope (overdue, today, this week, next week), look up who's on a project, send a Basecamp summary to Slack, or otherwise drive the basecamp-* MCP tools. Triggers on phrases like "my tasks", "[person]'s tasks", "overdue", "due today/this week", "what's on Erin's plate", "L2 project tasks", "send to Slack channel".
+description: Use when the user wants to query or modify Basecamp 3 through this MCP server — find their own tasks, find someone else's tasks ("show me Jill's tasks due this week"), filter by due-date scope (overdue, today, this week, next week), look up who's on a project, send a Basecamp summary to Slack, create or update todos / todolists / messages / comments / schedule entries, trash items, or otherwise drive the basecamp-* MCP tools. Triggers on phrases like "my tasks", "[person]'s tasks", "overdue", "due today/this week", "what's on Erin's plate", "L2 project tasks", "send to Slack channel", "create a todo", "post a message", "trash this".
 ---
 
 # Using the Basecamp MCP server
 
 ## Overview
 
-This MCP server wraps the Basecamp 3 API. It exposes ~50 tools — most are CRUD on todolists, todos, cards, columns, documents, etc. The tools that come up most often in conversation are the **task-finding** tools added for the L2 / weekly-report workflow.
+This MCP server wraps the Basecamp 3 API. It exposes 65 tools — full read + write parity for projects, todo lists, todos, cards, columns, messages, comments, schedule entries, documents, and webhooks. The tools that come up most often are the **task-finding** read tools (added for the L2 / weekly-report workflow) and the **write** tools (create/update/status-change for everyday Basecamp upkeep).
 
 When the user asks a Basecamp question, your job is to pick the cheapest tool that answers it and avoid walking the whole project tree.
 
 ## Quick tool selection
+
+### Reading
 
 | User says | Tool to call |
 |---|---|
@@ -26,10 +28,45 @@ When the user asks a Basecamp question, your job is to pick the cheapest tool th
 | "what projects do we have" | `get_projects` |
 | "what's in this project" | `get_project` (returns the dock — todoset id, card_table id, etc.) |
 | "show me the to-do lists in [project]" | `get_todolists` |
+| "show me a single todo list" | `get_todolist` (project_id + todolist_id) |
 | "show me todos in [list]" | `get_todos` |
-| Card-table work (kanban) | `get_card_table` → `get_columns` → `get_cards` |
+| "show me a single todo" | `get_todo` (project_id + todo_id) |
+| Card-table work (kanban) | `get_card_table` → `get_columns` → `get_cards` → `get_card` |
+| "show me the project's message board / list messages" | `get_message_board` → `get_messages` → `get_message` |
+| "show me the project's schedule / list events" | `get_schedule` → `get_schedule_entries` → `get_schedule_entry` |
+| "show me a single comment" | `get_comment` |
+| "list comments on [todo/message/card]" | `get_comments` (recording_id is the parent) |
+| "list project documents" / "list uploads" | `get_documents` / `get_uploads` |
+| "list / inspect webhooks" | `get_webhooks` |
+| "campfire / chat history" | `get_campfire_lines` |
+| "daily check-ins" | `get_daily_check_ins` → `get_question_answers` |
 
 **Never** walk every project's todolists by hand to answer a "who has overdue tasks" question — use the recordings-backed assignment tools (`get_my_*` or `get_assignments_for_person`).
+
+### Writing
+
+| User says | Tool to call |
+|---|---|
+| "create a todo in [list]" | `create_todo` (project_id, todolist_id, content, +optional description/assignee_ids/due_on/starts_on/notify) |
+| "rename / re-due / re-assign / re-describe a todo" | `update_todo` (only the fields being changed; rest are preserved — see Write semantics) |
+| "mark this todo done" | `complete_todo` |
+| "reopen this todo" | `uncomplete_todo` |
+| "move this todo to position N" / "into a different list" | `reposition_todo` (with optional `parent_id` for the destination list) |
+| "create a new todo list" | `create_todolist` (project_id, todoset_id, name, +optional description) |
+| "rename / re-describe a list" | `update_todolist` |
+| "post a comment on [todo/message/document/card]" | `create_comment` (project_id, recording_id, content) |
+| "edit a comment" | `update_comment` (single-field partial PUT — just `content`) |
+| "post a message to [project]" | `get_message_board` → `create_message` (project_id, message_board_id, subject, +optional content/category_id/subscriptions) |
+| "edit a message" | `update_message` |
+| "schedule an event" | `get_schedule` → `create_schedule_entry` (summary, starts_at, ends_at, +optional description/participant_ids/all_day/notify) |
+| "edit a scheduled event" | `update_schedule_entry` |
+| "trash / archive / restore a [todo/list/message/comment/event]" | `set_<resource>_status` — one per resource: `set_todo_status`, `set_todolist_status`, `set_message_status`, `set_comment_status`, `set_schedule_entry_status` (status: `'active' \| 'archived' \| 'trashed'`) |
+| "create a kanban card" | `create_card` |
+| "update / move / complete a card" | `update_card` / `move_card` / `complete_card` |
+| "manage card-table columns" | `create_column` / `update_column` / `move_column` / `update_column_color` |
+| "add a sub-task to a card" | `create_card_step` / `complete_card_step` |
+| "create / update / trash a document" | `create_document` / `update_document` / `trash_document` |
+| "create / delete a webhook" | `create_webhook` / `delete_webhook` |
 
 ## Date-scope vocabulary
 
@@ -45,6 +82,54 @@ The `scope` param on `get_my_due_assignments` and `get_assignments_for_person` a
 Scopes are **disjoint**. "This week" in everyday speech usually maps to `due_today` + `due_tomorrow` + `due_later_this_week` — call once per scope and concatenate, or pick the one the user actually meant.
 
 If the user says "this week" without specifying, ask: "do you want everything from today through Sunday, or just the rest of the week after today?"
+
+## Write semantics
+
+A few invariants that make the write tools predictable and safe.
+
+### Updates are fetch-then-merge
+
+Every `update_*` tool except `update_comment` follows the **full** strategy: it GETs the current resource, overlays your patch onto a whitelist of editable fields, and PUTs the union. So:
+
+```
+update_todo({ project_id, todo_id, content: 'new title' })
+```
+
+…will **not** clobber `description`, `assignee_ids`, `due_on`, etc. — they survive untouched.
+
+`update_comment` is the exception: it's a single-field partial PUT (just `content`). No GET, no merge.
+
+A `null` in your patch is treated identically to omission ("leave alone"). There is **no way to set a field to null** via these tools — that's intentional, BC3's PUT semantics for these resources don't support it. To clear a description-style field, send `''` (empty string).
+
+### Status changes are idempotent
+
+`set_todo_status`, `set_todolist_status`, `set_message_status`, `set_comment_status`, `set_schedule_entry_status` are safe to call repeatedly with the same status. Trashing a trashed item still returns success. Use them for soft-delete (`'trashed'`), archive (`'archived'`), or restore (`'active'`).
+
+Trash is **recoverable** from the BC3 UI — `'trashed'` is not destruction.
+
+For documents (the one resource type that doesn't go through the recordings-status endpoint): use `trash_document` instead of any `set_*_status` call.
+
+### `create_message` always publishes
+
+`create_message` always sends `status: 'active'` under the hood — no draft-state escape hatch. If the user wants a draft they have to create it in the BC3 UI.
+
+### `create_comment` works on any recording
+
+The `recording_id` arg accepts the id of any "recording" in BC3's sense — todos, messages, documents, cards, schedule entries. To comment on a todo: `create_comment({ project_id, recording_id: <todo_id>, content })`.
+
+### Bad args return a structured envelope, not an exception
+
+The dispatch layer validates args with zod before any BC3 call. A schema failure returns:
+
+```json
+{
+  "status": "error",
+  "error": "validation",
+  "message": "Invalid arguments for update_card: card_id: Expected string, received number"
+}
+```
+
+The `error` field is one of: `'validation'`, `'auth.required'`, `'auth.expired'`, `'unknown_tool'`, `'execution'`. Always check `parsed.status === 'success'` before using a tool's payload — the MCP envelope wraps errors as content too, not as protocol-level rejections.
 
 ## Common workflows
 
@@ -90,6 +175,39 @@ This is a two-pass hybrid. `get_assignments_for_person` is the primary tool, but
 
 **Note on `get_todos` and parent lists:** `get_todos` called on a **parent todolist** returns empty when all its items live in subgroups. Only call `get_todos` on subgroup IDs (i.e. IDs that appeared as `parent.id` in assignment results), not on the top-level list ID.
 
+### "Create a todo in [project] / [list]"
+
+1. If you don't have the todolist id, `get_todolists` (or `get_project` first if you only have the project URL) to find it
+2. `create_todo` with `project_id`, `todolist_id`, `content`, and any optional fields the user mentioned (`description`, `assignee_ids`, `due_on`, `starts_on`, `notify`)
+3. The response is the created todo with its server-assigned `id`. If you intend to follow up (set status, edit, comment), record that id
+
+### "Trash these old items"
+
+For todos, todolists, messages, comments, schedule entries: `set_<resource>_status` with `status: 'trashed'`.
+
+For documents: `trash_document` (different endpoint, same effect — moves to trash, recoverable from BC3 UI).
+
+Items in trash are **recoverable from the BC3 UI**. This is soft-delete, not destruction. Permanent deletion has no MCP tool — it's a manual action in BC3.
+
+### "Post a status update to a project's message board"
+
+1. `get_message_board` with `project_id` to find the board's id
+2. `create_message` with `project_id`, `message_board_id`, `subject`, and optional `content` (HTML)
+3. Optional: `subscriptions: [person_ids]` to notify a specific subset; default is all project members
+4. Optional: `category_id` if the board has message types configured
+
+### "Reschedule / rename a calendar event"
+
+1. If you don't have the entry id, `get_schedule` → `get_schedule_entries` to list
+2. `update_schedule_entry` with only the fields changing (e.g., `summary`, or new `starts_at` + `ends_at`)
+3. Times survive when summary is changed and vice versa — the merge is per-field
+
+### "Comment on a Jill's overdue task to remind her"
+
+1. Get the todo id (from a prior `get_assignments_for_person` call, or `get_todos`)
+2. `create_comment` with `project_id`, `recording_id: <todo_id>`, `content: '<div>...HTML body...</div>'`
+3. Comments support BC3 rich-text HTML — wrap in `<div>` for paragraph semantics
+
 ## Pitfalls (real ones, not hypothetical)
 
 | Pitfall | Symptom | What to do |
@@ -105,6 +223,13 @@ This is a two-pass hybrid. `get_assignments_for_person` is the primary tool, but
 | **Stored result files have unexpected format** | Bash/Python script calls `data.get('assignments')` on a stored file and gets nothing, even though the file is hundreds of KB | When the MCP stores a large result to disk, it wraps the payload: the file is a JSON array `[{"type": "text", "text": "<JSON string>"}]`. Parse with: `outer = json.load(f); data = json.loads(outer[0]['text']); assignments = data['assignments']`. Never call `.get('assignments')` directly on the outer structure. |
 | **Subgroup todos missed in all-project scans** | A task clearly visible in the Basecamp UI is absent from `get_assignments_for_person` results | Basecamp todolist **subgroups** are nested Todolist objects. The recordings API surfaces most of them, but people with large assignment histories may have results truncated. Always do Pass 2 (subgroup verification): collect `parent.id` values seen in Pass 1, call `get_todos` on each, and merge. |
 | **`get_todos` on a parent list returns empty** | Calling `get_todos` with a top-level todolist ID returns `count: 0` even though the list shows many items in the UI | The list's todos all live in subgroups. `get_todos` on the parent returns nothing. Use the subgroup IDs (found as `parent.id` in assignment results) instead. |
+| **`update_*` silently drops `null` patches** | You send `{description: null}` to clear a description; nothing changes | `null` and undefined are both "leave alone". To actually empty a field, send `''` (empty string) — BC3 accepts empty strings for description-style fields. |
+| **Validation envelope, not exception** | A bad `update_card` call returns `{status: 'error', error: 'validation', message: '...'}` instead of throwing | The dispatch layer validates with zod before calling BC3. Always check `parsed.status === 'success'` before using a result's payload. The wire shape always succeeds at the MCP protocol layer; errors live inside `content`. |
+| **Invalid status enum** | `set_todo_status({status: 'destroyed'})` returns a validation envelope before BC3 is hit | Status enum is exactly `'active' \| 'archived' \| 'trashed'`. Anything else gets rejected at the schema layer. |
+| **`create_comment` recording_id mismatch** | You pass a card_table id or a column id; BC3 returns 422 | `recording_id` is the *leaf* — a todo, message, document, card, or schedule entry — not its container. The 422 is BC3's way of saying "that's not a recording I can attach a comment to." |
+| **`reposition_todo` parent_id is the destination** | Reposition appears to do nothing, or moves the todo to the wrong list | `parent_id` is the *new* todolist id (omit to reposition within the current list). It is not the current parent. |
+| **`create_message` always publishes** | The user wants a draft to review; the message goes live immediately | There is no draft path through the API surface. If the user wants a draft, they need to use the BC3 UI. |
+| **HTML in `content` is required for rich text** | A comment posted as plain text shows without paragraph breaks in BC3 | Wrap comment / message / description bodies in `<div>...</div>` (or other BC3-allowed tags). The plain-text-as-HTML path is honored but renders without structure. |
 
 ## Output formatting
 
@@ -121,6 +246,13 @@ Always include: title (`content`), `due_on`, `bucket.name`, `parent.title`. The 
 
 When the user is just reading the answer in chat, prose is fine.
 
+For successful writes, confirm what changed (and the resulting id, if any) — the user usually wants to know the operation landed:
+
+```
+✓ Created todo "Review onboarding doc" in L2 → Documentation (id 12345678)
+✓ Trashed 3 stale todos in L2 → Old Backlog
+```
+
 ## Don't
 
 - Don't call `get_todos` for every todolist in every project to find someone's tasks. Use `get_assignments_for_person`.
@@ -131,3 +263,8 @@ When the user is just reading the answer in chat, prose is fine.
 - Don't trust `scope=overdue` to exclude completed tasks — it doesn't. Always filter `completed == false` in your own code.
 - Don't parse stored MCP result files as if they're raw Basecamp JSON. Unwrap the `[{"type":"text","text":"..."}]` envelope first.
 - Don't call `get_todos` on a top-level todolist ID and assume empty means no tasks — the todos may all be in subgroups.
+- Don't pass `null` to `update_*` expecting field-clear behavior — `null` means "leave alone", same as omission. Use `''` to clear, where BC3 accepts it.
+- Don't assume `set_*_status({status: 'trashed'})` deletes — it moves to trash, recoverable from the BC3 UI.
+- Don't compose multi-step writes (create + update + status) without checking each call's `status` field — a validation failure mid-sequence leaves your state half-applied.
+- Don't auto-perform destructive writes (`set_*_status`, `trash_document`, `delete_webhook`) without confirming the user actually meant *these* items. Echo a summary first: "About to trash 5 todos in L2 → Old Backlog — confirm?"
+- Don't loop `create_*` calls in a tight burst — BC3 rate-limits writes. If you have N items to create, do them serially with small pauses.

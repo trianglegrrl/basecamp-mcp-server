@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import axios, { AxiosInstance, AxiosResponse, AxiosRequestConfig } from 'axios';
 import type {
   BasecampProject,
   TodoList,
@@ -13,6 +13,7 @@ import type {
   Document,
   Upload,
   Webhook,
+  MessageBoard,
   DailyCheckIn,
   QuestionAnswer,
   OAuthTokens,
@@ -21,7 +22,28 @@ import type {
   Assignment,
   AssignmentScope,
   MyAssignmentsResponse,
+  TodoCreateBody,
+  TodoUpdateBody,
+  TodolistCreateBody,
+  TodolistUpdateBody,
+  CommentCreateBody,
+  CommentUpdateBody,
+  CreateMessageInput,
+  MessageUpdateBody,
+  Schedule,
+  ScheduleEntry,
+  ScheduleEntryCreateBody,
+  ScheduleEntryUpdateBody,
+  RecordingStatus,
 } from '../types/basecamp.js';
+import { parseNextLink, walkPaginated } from './pagination.js';
+import { getDockEntryWithDetails } from './resources/dock.js';
+import * as todosResource from './resources/todos.js';
+import * as todolistsResource from './resources/todolists.js';
+import * as commentsResource from './resources/comments.js';
+import * as messagesResource from './resources/messages.js';
+import * as scheduleResource from './resources/schedule.js';
+import * as recordingStatusResource from './resources/recording-status.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -31,12 +53,6 @@ const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'due_next_week',
   'due_later',
 ];
-
-function parseNextLink(linkHeader?: string): string | null {
-  if (!linkHeader) return null;
-  const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-  return match ? match[1] : null;
-}
 
 function addDays(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00Z');
@@ -153,14 +169,66 @@ export class BasecampClient {
     return response.data;
   }
 
+  async getTodolist(projectId: string, todolistId: string): Promise<TodoList> {
+    return todolistsResource.getTodolist(this.client, projectId, todolistId);
+  }
+
+  async createTodolist(
+    projectId: string,
+    todosetId: string,
+    body: TodolistCreateBody,
+  ): Promise<TodoList> {
+    return todolistsResource.createTodolist(this.client, projectId, todosetId, body);
+  }
+
+  async updateTodolist(
+    projectId: string,
+    todolistId: string,
+    patch: TodolistUpdateBody,
+  ): Promise<TodoList> {
+    return todolistsResource.updateTodolist(this.client, projectId, todolistId, patch);
+  }
+
   async getTodos(projectId: string, todolistId: string): Promise<Todo[]> {
     const response = await this.client.get(`/buckets/${projectId}/todolists/${todolistId}/todos.json`);
     return response.data;
   }
 
-  async getTodo(todoId: string): Promise<Todo> {
-    const response = await this.client.get(`/todos/${todoId}.json`);
-    return response.data;
+  async getTodo(projectId: string, todoId: string): Promise<Todo> {
+    return todosResource.getTodo(this.client, projectId, todoId);
+  }
+
+  async createTodo(
+    projectId: string,
+    todolistId: string,
+    body: TodoCreateBody,
+  ): Promise<Todo> {
+    return todosResource.createTodo(this.client, projectId, todolistId, body);
+  }
+
+  async updateTodo(
+    projectId: string,
+    todoId: string,
+    patch: TodoUpdateBody,
+  ): Promise<Todo> {
+    return todosResource.updateTodo(this.client, projectId, todoId, patch);
+  }
+
+  async completeTodo(projectId: string, todoId: string): Promise<void> {
+    return todosResource.completeTodo(this.client, projectId, todoId);
+  }
+
+  async uncompleteTodo(projectId: string, todoId: string): Promise<void> {
+    return todosResource.uncompleteTodo(this.client, projectId, todoId);
+  }
+
+  async repositionTodo(
+    projectId: string,
+    todoId: string,
+    position: number,
+    parentId?: string,
+  ): Promise<void> {
+    return todosResource.repositionTodo(this.client, projectId, todoId, position, parentId);
   }
 
   // My / assignments / people methods
@@ -215,6 +283,23 @@ export class BasecampClient {
       response = await this.client.get(next);
     }
     return all;
+  }
+
+  async getRecordings(opts: {
+    type: string;
+    bucket?: string;
+    status?: 'active' | 'archived' | 'trashed';
+  }): Promise<any[]> {
+    // Recording shapes vary by `type`, so the element type is intentionally
+    // widened. Callers (e.g. live-leak-audit) narrow as needed.
+    const params: Record<string, string> = { type: opts.type };
+    if (opts.bucket) params.bucket = opts.bucket;
+    if (opts.status) params.status = opts.status;
+    return walkPaginated<any>(
+      (url, config) => this.client.get(url, config as AxiosRequestConfig | undefined),
+      '/projects/recordings.json',
+      { params },
+    );
   }
 
   async findAssignmentsForPerson(opts: {
@@ -292,6 +377,15 @@ export class BasecampClient {
       }
       throw error;
     }
+  }
+
+  async getCardTableWithDetails(projectId: string): Promise<CardTable> {
+    return getDockEntryWithDetails<CardTable>(
+      this.client,
+      projectId,
+      'card_table',
+      (p, id) => `/buckets/${p}/card_tables/${id}.json`,
+    );
   }
 
   // Column methods
@@ -477,6 +571,82 @@ export class BasecampClient {
     return response.data;
   }
 
+  async getComment(projectId: string, commentId: string): Promise<Comment> {
+    return commentsResource.getComment(this.client, projectId, commentId);
+  }
+
+  async createComment(
+    projectId: string,
+    recordingId: string,
+    body: CommentCreateBody,
+  ): Promise<Comment> {
+    return commentsResource.createComment(this.client, projectId, recordingId, body);
+  }
+
+  async updateComment(
+    projectId: string,
+    commentId: string,
+    patch: CommentUpdateBody,
+  ): Promise<Comment> {
+    return commentsResource.updateComment(this.client, projectId, commentId, patch);
+  }
+
+  async getMessageBoard(projectId: string): Promise<MessageBoard> {
+    return messagesResource.getMessageBoard(this.client, projectId);
+  }
+
+  async getMessages(projectId: string, messageBoardId: string): Promise<Message[]> {
+    return messagesResource.getMessages(this.client, projectId, messageBoardId);
+  }
+
+  async getMessage(projectId: string, messageId: string): Promise<Message> {
+    return messagesResource.getMessage(this.client, projectId, messageId);
+  }
+
+  async createMessage(
+    projectId: string,
+    messageBoardId: string,
+    input: CreateMessageInput,
+  ): Promise<Message> {
+    return messagesResource.createMessage(this.client, projectId, messageBoardId, input);
+  }
+
+  async updateMessage(
+    projectId: string,
+    messageId: string,
+    patch: MessageUpdateBody,
+  ): Promise<Message> {
+    return messagesResource.updateMessage(this.client, projectId, messageId, patch);
+  }
+
+  async getSchedule(projectId: string): Promise<Schedule> {
+    return scheduleResource.getSchedule(this.client, projectId);
+  }
+
+  async getScheduleEntries(projectId: string, scheduleId: string): Promise<ScheduleEntry[]> {
+    return scheduleResource.getScheduleEntries(this.client, projectId, scheduleId);
+  }
+
+  async getScheduleEntry(projectId: string, entryId: string): Promise<ScheduleEntry> {
+    return scheduleResource.getScheduleEntry(this.client, projectId, entryId);
+  }
+
+  async createScheduleEntry(
+    projectId: string,
+    scheduleId: string,
+    body: ScheduleEntryCreateBody,
+  ): Promise<ScheduleEntry> {
+    return scheduleResource.createScheduleEntry(this.client, projectId, scheduleId, body);
+  }
+
+  async updateScheduleEntry(
+    projectId: string,
+    entryId: string,
+    patch: ScheduleEntryUpdateBody,
+  ): Promise<ScheduleEntry> {
+    return scheduleResource.updateScheduleEntry(this.client, projectId, entryId, patch);
+  }
+
   // Document methods
   async getDocuments(projectId: string, vaultId: string): Promise<Document[]> {
     const response = await this.client.get(`/buckets/${projectId}/vaults/${vaultId}/documents.json`);
@@ -587,5 +757,13 @@ export class BasecampClient {
   async getEvents(projectId: string, recordingId: string): Promise<any[]> {
     const response = await this.client.get(`/buckets/${projectId}/recordings/${recordingId}/events.json`);
     return response.data;
+  }
+
+  async setRecordingStatus(
+    projectId: string,
+    recordingId: string,
+    status: RecordingStatus,
+  ): Promise<void> {
+    return recordingStatusResource.setRecordingStatus(this.client, projectId, recordingId, status);
   }
 }
