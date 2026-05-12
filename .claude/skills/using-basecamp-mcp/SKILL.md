@@ -64,7 +64,9 @@ When the user asks a Basecamp question, your job is to pick the cheapest tool th
 | "create a kanban card" | `create_card` |
 | "update / move / complete a card" | `update_card` / `move_card` / `complete_card` |
 | "manage card-table columns" | `create_column` / `update_column` / `move_column` / `update_column_color` |
-| "add a sub-task to a card" | `create_card_step` / `complete_card_step` |
+| "add a sub-task to a card" / "edit a step" / "look up a step" | `create_card_step` / `update_card_step` / `get_card_step` / `complete_card_step` |
+| "assign someone to a card" | `update_card` with `assignee_ids: [<numeric person id>]` — see Write semantics; create_card itself doesn't accept assignees |
+| "assign someone to a card step" | `create_card_step` accepts `assignee_ids` at creation, or `update_card_step` to change later. NUMERIC ids only. |
 | "create / update / trash a document" | `create_document` / `update_document` / `trash_document` |
 | "create / delete a webhook" | `create_webhook` / `delete_webhook` |
 
@@ -116,6 +118,24 @@ For documents (the one resource type that doesn't go through the recordings-stat
 ### `create_comment` works on any recording
 
 The `recording_id` arg accepts the id of any "recording" in BC3's sense — todos, messages, documents, cards, schedule entries. To comment on a todo: `create_comment({ project_id, recording_id: <todo_id>, content })`.
+
+### Card assignment is a two-step dance, and IDs must be numeric
+
+Two BC3 quirks combine into one footgun:
+
+1. **`POST /card_tables/lists/{column_id}/cards.json` does not accept `assignee_ids`.** You can only set `title`, `content`, `due_on`, and `notify` at create time. To assign people to a card, **call `create_card` first, then `update_card` with `assignee_ids`**. Card *steps* are the exception — `create_card_step` does accept assignees at create time.
+
+2. **`assignee_ids` must be an array of NUMERIC person IDs**, not strings. BC3 silently drops string IDs — no 422, no error, the assignment just doesn't land. Use the integer ids from `get_people` / `get_project_people` directly:
+
+```js
+// ✅ correct
+update_card({ project_id, card_id, assignee_ids: [1049715913, 1049715928] })
+
+// 🐛 BC3 silently drops these — assignment fails with no error
+update_card({ project_id, card_id, assignee_ids: ['1049715913'] })
+```
+
+Todos don't have either quirk — `create_todo` accepts `assignee_ids` at creation, and the API tolerates either string or numeric IDs. The card/step world is stricter.
 
 ### Bad args return a structured envelope, not an exception
 
@@ -218,6 +238,8 @@ Items in trash are **recoverable from the BC3 UI**. This is soft-delete, not des
 | **Cross-user lookups are slow** | `get_assignments_for_person` takes 5–15s | Expected — BC3 has no server-side assignee filter, so the tool walks `/projects/recordings.json?type=Todo` (paginated) and filters client-side. Don't run it in a tight loop; ask once with the right scope. |
 | **`due_on` is null** | A todo has no due date and gets dropped from scope filters | Scope filters only match items with a date. If the user asks "all of Jill's open tasks", omit `scope` entirely. |
 | **Card steps look like todos** | A "task" in the response has a `parent` that's a card, not a todolist | Some items are kanban card steps surfaced as assignments. They share completion endpoints with todos. Render them with the parent card title for context. |
+| **Card assignment doesn't stick** | `update_card` (or `create_card_step`) returns success but the people don't appear in the BC3 UI | Two possible causes: (1) you sent `assignee_ids` as strings — BC3 silently drops them, must be numbers; (2) the person isn't a member of the project yet — BC3 won't surface a 422 here, the IDs just don't take. Verify both: `get_people` returns numeric IDs, and the assignee shows up in `get_project_people` for the target project before assigning. |
+| **`create_card` rejects `assignee_ids`** | You pass `assignee_ids` to `create_card`; the schema may accept it but BC3 ignores it (the field isn't in the create endpoint) | BC3 quirk — the create endpoint genuinely doesn't take assignees. Two-step it: `create_card` → `update_card` with the IDs. (Card *steps* are the exception — `create_card_step` does accept assignees at create.) |
 | **"L2" is ambiguous** | User says "L2 tasks", you guess wrong project | Ask for the URL or call `get_projects` and confirm. The numeric id is in the URL: `https://3.basecamp.com/4418220/projects/45799317` → `45799317`. |
 | **`scope=overdue` includes completed items** | All-project scan returns many items, but filtering by `completed == false` in your script yields 0 when there are clearly open tasks | The scope filter is date-only — it does NOT exclude completed todos. Always filter `completed == false` explicitly after receiving results. |
 | **Stored result files have unexpected format** | Bash/Python script calls `data.get('assignments')` on a stored file and gets nothing, even though the file is hundreds of KB | When the MCP stores a large result to disk, it wraps the payload: the file is a JSON array `[{"type": "text", "text": "<JSON string>"}]`. Parse with: `outer = json.load(f); data = json.loads(outer[0]['text']); assignments = data['assignments']`. Never call `.get('assignments')` directly on the outer structure. |
