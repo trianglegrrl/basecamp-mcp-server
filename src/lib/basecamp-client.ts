@@ -35,6 +35,10 @@ import type {
   ScheduleEntryCreateBody,
   ScheduleEntryUpdateBody,
   RecordingStatus,
+  ProjectCreateBody,
+  ProjectUpdateBody,
+  ProjectAccessBody,
+  ProjectAccessResponse,
 } from '../types/basecamp.js';
 import { parseNextLink, walkPaginated } from './pagination.js';
 import { getDockEntryWithDetails } from './resources/dock.js';
@@ -44,6 +48,7 @@ import * as commentsResource from './resources/comments.js';
 import * as messagesResource from './resources/messages.js';
 import * as scheduleResource from './resources/schedule.js';
 import * as recordingStatusResource from './resources/recording-status.js';
+import * as projectsResource from './resources/projects.js';
 
 const VALID_ASSIGNMENT_SCOPES: AssignmentScope[] = [
   'overdue',
@@ -765,5 +770,21 @@ export class BasecampClient {
     status: RecordingStatus,
   ): Promise<void> {
     return recordingStatusResource.setRecordingStatus(this.client, projectId, recordingId, status);
+  }
+
+  async createProject(body: ProjectCreateBody): Promise<BasecampProject> {
+    return projectsResource.createProject(this.client, body);
+  }
+
+  async updateProject(projectId: string, patch: ProjectUpdateBody): Promise<BasecampProject> {
+    return projectsResource.updateProject(this.client, projectId, patch);
+  }
+
+  async trashProject(projectId: string): Promise<void> {
+    return projectsResource.trashProject(this.client, projectId);
+  }
+
+  async updateProjectAccess(projectId: string, body: ProjectAccessBody): Promise<ProjectAccessResponse> {
+    return projectsResource.updateProjectAccess(this.client, projectId, body);
   }
 }

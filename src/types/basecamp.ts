@@ -25,6 +25,18 @@ export interface BasecampProject {
   created_at: string;
   updated_at: string;
   status: string;
+  // Writable fields BC3 accepts on PUT but doesn't echo on GET — declared
+  // optional so the merge whitelist's `keyof TBody & keyof TResource`
+  // constraint can include them.
+  admissions?: ProjectAdmissions;
+  schedule_attributes?: ProjectScheduleAttributes;
+}
+
+export type ProjectAdmissions = 'invite' | 'employee' | 'team';
+
+export interface ProjectScheduleAttributes {
+  start_date: string;
+  end_date: string;
 }
 
 export interface DockItem {
@@ -375,3 +387,41 @@ export interface ScheduleEntryUpdateBody {
 }
 
 export type RecordingStatus = 'active' | 'archived' | 'trashed';
+
+// -------------------------------------------------------------------
+// Project write bodies. Per /Users/alaina/projects/bc3-api/sections/
+// projects.md and people.md.
+// -------------------------------------------------------------------
+
+export interface ProjectCreateBody {
+  name: string;
+  description?: string;
+}
+
+export interface ProjectUpdateBody {
+  // BC3's PUT /projects/{id}.json requires `name` — when used through
+  // applyUpdate('full', ...) the merge layer fetches the current name
+  // and supplies it if the patch doesn't.
+  name?: string;
+  description?: string;
+  admissions?: ProjectAdmissions;
+  schedule_attributes?: ProjectScheduleAttributes;
+}
+
+export interface ProjectAccessGrantInput {
+  name: string;
+  email_address: string;
+  title?: string;
+  company_name?: string;
+}
+
+export interface ProjectAccessBody {
+  grant?: number[];
+  revoke?: number[];
+  create?: ProjectAccessGrantInput[];
+}
+
+export interface ProjectAccessResponse {
+  granted: Person[];
+  revoked: Person[];
+}
