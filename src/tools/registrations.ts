@@ -147,7 +147,7 @@ export const tools: Tool[] = [
   },
   {
     name: 'create_card',
-    description: 'Create a new card in a column',
+    description: 'Create a new card in a column. Note: BC3 does NOT accept assignee_ids on creation — to assign people, follow up with update_card. Card steps (create_card_step) are the exception; they accept assignees at create time.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -232,7 +232,7 @@ export const tools: Tool[] = [
   },
   {
     name: 'update_card',
-    description: 'Update a card',
+    description: 'Update a card. This is the route for adding or changing assignees on a card — BC3 does not accept assignee_ids on create_card, so create-then-update is the standard workflow. assignee_ids must be NUMBERS; strings are silently dropped by BC3.',
     inputSchema: {
       type: 'object',
       properties: {
