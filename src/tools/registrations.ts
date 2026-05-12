@@ -147,7 +147,7 @@ export const tools: Tool[] = [
   },
   {
     name: 'create_card',
-    description: 'Create a new card in a column',
+    description: 'Create a new card in a column. Note: BC3 does NOT accept assignee_ids on creation — to assign people, follow up with update_card. Card steps (create_card_step) are the exception; they accept assignees at create time.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -232,7 +232,7 @@ export const tools: Tool[] = [
   },
   {
     name: 'update_card',
-    description: 'Update a card',
+    description: 'Update a card. This is the route for adding or changing assignees on a card — BC3 does not accept assignee_ids on create_card, so create-then-update is the standard workflow. assignee_ids must be NUMBERS; strings are silently dropped by BC3.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -241,7 +241,7 @@ export const tools: Tool[] = [
         title: { type: 'string', description: 'The new card title' },
         content: { type: 'string', description: 'The new card content/description' },
         due_on: { type: 'string', description: 'Due date (ISO 8601 format)' },
-        assignee_ids: { type: 'array', items: { type: 'string' }, description: 'Array of person IDs to assign to the card' },
+        assignee_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Array of person IDs to assign to the card. BC3 expects numeric person IDs (e.g., from get_people / get_project_people). Sending strings causes BC3 to silently drop them — the assignment never sticks.' },
       },
       required: ['project_id', 'card_id'],
     },
@@ -295,7 +295,7 @@ export const tools: Tool[] = [
         card_id: { type: 'string', description: 'The card ID' },
         title: { type: 'string', description: 'The step title' },
         due_on: { type: 'string', description: 'Optional due date (ISO 8601 format)' },
-        assignee_ids: { type: 'array', items: { type: 'string' }, description: 'Array of person IDs to assign to the step' },
+        assignee_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Array of person IDs to assign to the step. BC3 expects numeric person IDs (e.g., from get_people / get_project_people). Sending strings causes BC3 to silently drop them — the assignment never sticks.' },
       },
       required: ['project_id', 'card_id', 'title'],
     },
@@ -308,6 +308,33 @@ export const tools: Tool[] = [
       properties: {
         project_id: { type: 'string', description: 'The project ID' },
         step_id: { type: 'string', description: 'The step ID' },
+      },
+      required: ['project_id', 'step_id'],
+    },
+  },
+  {
+    name: 'get_card_step',
+    description: 'Get a single card step (sub-task) by ID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        step_id: { type: 'string', description: 'The step ID' },
+      },
+      required: ['project_id', 'step_id'],
+    },
+  },
+  {
+    name: 'update_card_step',
+    description: 'Update a card step (sub-task). Use this to assign people to a step — the create_card_step tool also accepts assignee_ids, but this is the route for changing them later.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        step_id: { type: 'string', description: 'The step ID' },
+        title: { type: 'string', description: 'New step title' },
+        due_on: { type: 'string', description: 'New due date (ISO 8601 format)' },
+        assignee_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Array of person IDs to assign to the step. BC3 expects numeric person IDs (e.g., from get_people / get_project_people). Sending strings causes BC3 to silently drop them — the assignment never sticks.' },
       },
       required: ['project_id', 'step_id'],
     },
@@ -851,6 +878,81 @@ export const tools: Tool[] = [
         notify:          { type: 'boolean' },
       },
       required: ['project_id', 'entry_id'],
+    },
+  },
+
+  // Project write tools
+  {
+    name: 'create_project',
+    description: 'Create a new Basecamp project. Returns the project with its server-assigned ID. Note: free-plan accounts hit a 507 error if they\'re at their project limit — surface this to the user.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name:        { type: 'string', description: 'The project name (required)' },
+        description: { type: 'string', description: 'Optional project description' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_project',
+    description: 'Update fields on an existing project. BC3\'s PUT requires `name`; this tool fetches the current name and supplies it when the patch doesn\'t (fetch-then-merge). Use `admissions` to change project visibility (`invite` / `employee` / `team`) and `schedule_attributes` for project start/end dates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id:  { type: 'string', description: 'The project ID' },
+        name:        { type: 'string', description: 'New project name' },
+        description: { type: 'string', description: 'New project description' },
+        admissions:  { type: 'string', enum: ['invite', 'employee', 'team'], description: 'Project visibility — `invite` = invited only, `employee` = anyone in the account, `team` = anyone except clients' },
+        schedule_attributes: {
+          type: 'object',
+          description: 'Project schedule. Both fields required if either is provided.',
+          properties: {
+            start_date: { type: 'string', description: 'ISO 8601 date (YYYY-MM-DD)' },
+            end_date:   { type: 'string', description: 'ISO 8601 date (YYYY-MM-DD)' },
+          },
+          required: ['start_date', 'end_date'],
+        },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'trash_project',
+    description: 'Move a project to trash. Recoverable from the BC3 UI for 30 days, then permanently deleted. Use this for soft-delete; there is no MCP tool for permanent deletion.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID to trash' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'update_project_access',
+    description: 'Grant or revoke project access for existing people, and/or invite new people to the project. This is the prerequisite for assigning someone to a card / todo / step in this project — BC3 won\'t accept assignments to people who aren\'t project members. Person IDs MUST be numeric (use the integer ids from get_people).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        grant:      { type: 'array', items: { type: 'number' }, description: 'Numeric person IDs to grant access to' },
+        revoke:     { type: 'array', items: { type: 'number' }, description: 'Numeric person IDs to revoke access from' },
+        create:     {
+          type: 'array',
+          description: 'New people to create and grant access to in one shot. Each item: { name, email_address, title?, company_name? }',
+          items: {
+            type: 'object',
+            properties: {
+              name:          { type: 'string' },
+              email_address: { type: 'string' },
+              title:         { type: 'string' },
+              company_name:  { type: 'string' },
+            },
+            required: ['name', 'email_address'],
+          },
+        },
+      },
+      required: ['project_id'],
     },
   },
 ];

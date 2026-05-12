@@ -12,6 +12,7 @@ import { handlers as comments } from './handlers/comments.js';
 import { handlers as recordingStatus } from './handlers/recording-status.js';
 import { handlers as messages } from './handlers/messages.js';
 import { handlers as schedule } from './handlers/schedule.js';
+import { handlers as projects } from './handlers/projects.js';
 
 type Handler = (args: Record<string, unknown>, client: BasecampClient) => Promise<MCPToolResultEnvelope>;
 
@@ -27,6 +28,7 @@ const ALL_HANDLERS: Record<string, Handler> = {
   ...recordingStatus,
   ...messages,
   ...schedule,
+  ...projects,
 };
 
 interface AxiosLikeError {
