@@ -21,7 +21,7 @@ const UpdateCardArgs = z.object({
   title: z.string().optional(),
   content: z.string().optional(),
   due_on: z.string().optional(),
-  assignee_ids: z.array(z.string()).optional(),
+  assignee_ids: z.array(z.union([z.string(), z.number()])).optional(),
 });
 
 const MoveCardArgs = z.object({
@@ -35,7 +35,7 @@ const CreateCardStepArgs = z.object({
   card_id: z.string(),
   title: z.string(),
   due_on: z.string().optional(),
-  assignee_ids: z.array(z.string()).optional(),
+  assignee_ids: z.array(z.union([z.string(), z.number()])).optional(),
 });
 
 const CompleteCardStepArgs = z.object({ project_id: z.string(), step_id: z.string() });

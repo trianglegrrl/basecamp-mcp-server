@@ -61,11 +61,27 @@ describe('cards handlers', () => {
   it('update_card (wire-up fix): forwards optional fields', async () => {
     const client = makeMockClient();
     (client.updateCard as any).mockResolvedValue({ id: '7', title: 'updated' });
+    // BC3's /cards/{id}.json expects assignee_ids as an array of NUMBERS
+    // (per /Users/alaina/projects/bc3-api/sections/card_table_cards.md).
+    // Sending strings causes BC3 to silently drop them — the assignment
+    // never sticks, no error returned. Pass numeric person IDs.
     await handlers.update_card(
-      { project_id: '100', card_id: '7', title: 'updated', content: 'new body', due_on: '2026-10-01', assignee_ids: ['1', '2'] },
+      { project_id: '100', card_id: '7', title: 'updated', content: 'new body', due_on: '2026-10-01', assignee_ids: [1049715913, 1049715928] },
       client,
     );
-    expect(client.updateCard).toHaveBeenCalledWith('100', '7', 'updated', 'new body', '2026-10-01', ['1', '2']);
+    expect(client.updateCard).toHaveBeenCalledWith('100', '7', 'updated', 'new body', '2026-10-01', [1049715913, 1049715928]);
+  });
+
+  it('update_card: also accepts assignee_ids as strings (back-compat)', async () => {
+    const client = makeMockClient();
+    (client.updateCard as any).mockResolvedValue({ id: '7' });
+    await handlers.update_card(
+      { project_id: '100', card_id: '7', assignee_ids: ['1049715913'] },
+      client,
+    );
+    // Strings flow through to the client untouched. Note: BC3 silently
+    // drops string assignee_ids — callers ought to use numbers.
+    expect(client.updateCard).toHaveBeenCalledWith('100', '7', undefined, undefined, undefined, ['1049715913']);
   });
 
   it('move_card: forwards (project_id, card_id, column_id)', async () => {
@@ -96,14 +112,26 @@ describe('cards handlers', () => {
     expect(parsed.count).toBe(2);
   });
 
-  it('create_card_step: forwards positional args', async () => {
+  it('create_card_step: forwards positional args with numeric assignee_ids', async () => {
     const client = makeMockClient();
     (client.createCardStep as any).mockResolvedValue({ id: 'a', title: 'Step' });
+    // Same BC3 contract as cards: assignee_ids must be numbers
+    // (per /Users/alaina/projects/bc3-api/sections/card_table_steps.md line 38).
     await handlers.create_card_step(
-      { project_id: '100', card_id: '7', title: 'Step', due_on: '2026-09-01', assignee_ids: ['1'] },
+      { project_id: '100', card_id: '7', title: 'Step', due_on: '2026-09-01', assignee_ids: [1049715913] },
       client,
     );
-    expect(client.createCardStep).toHaveBeenCalledWith('100', '7', 'Step', '2026-09-01', ['1']);
+    expect(client.createCardStep).toHaveBeenCalledWith('100', '7', 'Step', '2026-09-01', [1049715913]);
+  });
+
+  it('create_card_step: also accepts string assignee_ids (back-compat)', async () => {
+    const client = makeMockClient();
+    (client.createCardStep as any).mockResolvedValue({ id: 'a' });
+    await handlers.create_card_step(
+      { project_id: '100', card_id: '7', title: 'Step', assignee_ids: ['1049715913'] },
+      client,
+    );
+    expect(client.createCardStep).toHaveBeenCalledWith('100', '7', 'Step', undefined, ['1049715913']);
   });
 
   it('complete_card_step: forwards (project_id, step_id)', async () => {

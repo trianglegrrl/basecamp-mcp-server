@@ -478,7 +478,7 @@ export class BasecampClient {
     title?: string,
     content?: string,
     dueOn?: string,
-    assigneeIds?: string[]
+    assigneeIds?: Array<string | number>
   ): Promise<Card> {
     const data: any = {};
     if (title) data.title = title;
@@ -516,7 +516,7 @@ export class BasecampClient {
     cardId: string,
     title: string,
     dueOn?: string,
-    assigneeIds?: string[]
+    assigneeIds?: Array<string | number>
   ): Promise<CardStep> {
     const data: any = { title };
     if (dueOn) data.due_on = dueOn;
@@ -536,7 +536,7 @@ export class BasecampClient {
     stepId: string,
     title?: string,
     dueOn?: string,
-    assigneeIds?: string[]
+    assigneeIds?: Array<string | number>
   ): Promise<CardStep> {
     const data: any = {};
     if (title) data.title = title;
