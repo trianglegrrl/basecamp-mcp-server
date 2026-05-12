@@ -1,13 +1,13 @@
 ---
 name: using-basecamp-mcp
-description: Use when the user wants to query or modify Basecamp 3 through this MCP server — find their own tasks, find someone else's tasks ("show me Jill's tasks due this week"), filter by due-date scope (overdue, today, this week, next week), look up who's on a project, send a Basecamp summary to Slack, create or update todos / todolists / messages / comments / schedule entries, trash items, or otherwise drive the basecamp-* MCP tools. Triggers on phrases like "my tasks", "[person]'s tasks", "overdue", "due today/this week", "what's on Erin's plate", "L2 project tasks", "send to Slack channel", "create a todo", "post a message", "trash this".
+description: Use when the user wants to query or modify Basecamp 3 through this MCP server — find their own tasks, find someone else's tasks ("show me Jill's tasks due this week"), filter by due-date scope (overdue, today, this week, next week), look up who's on a project, send a Basecamp summary to Slack, create or update projects / todos / todolists / messages / comments / schedule entries, add or remove people from a project, trash items, or otherwise drive the basecamp-* MCP tools. Triggers on phrases like "my tasks", "[person]'s tasks", "overdue", "due today/this week", "what's on Erin's plate", "L2 project tasks", "send to Slack channel", "create a project", "spin up a new project", "create a todo", "post a message", "add [person] to project", "trash this".
 ---
 
 # Using the Basecamp MCP server
 
 ## Overview
 
-This MCP server wraps the Basecamp 3 API. It exposes 65 tools — full read + write parity for projects, todo lists, todos, cards, columns, messages, comments, schedule entries, documents, and webhooks. The tools that come up most often are the **task-finding** read tools (added for the L2 / weekly-report workflow) and the **write** tools (create/update/status-change for everyday Basecamp upkeep).
+This MCP server wraps the Basecamp 3 API. It exposes 71 tools — full read + write parity for projects (including create/trash/access-management), todo lists, todos, cards, columns, messages, comments, schedule entries, documents, and webhooks. The tools that come up most often are the **task-finding** read tools (added for the L2 / weekly-report workflow), the **write** tools (create/update/status-change for everyday Basecamp upkeep), and the **project-setup** tools (spinning up a new project + adding people).
 
 When the user asks a Basecamp question, your job is to pick the cheapest tool that answers it and avoid walking the whole project tree.
 
@@ -47,6 +47,10 @@ When the user asks a Basecamp question, your job is to pick the cheapest tool th
 
 | User says | Tool to call |
 |---|---|
+| "create a project" / "spin up a new Basecamp project" | `create_project` (name, +optional description). Free-plan accounts get a 507. |
+| "rename / re-describe a project" / "set start/end dates" / "change project visibility" | `update_project` (project_id + any of name / description / admissions / schedule_attributes) |
+| "trash this project" | `trash_project` (project_id). Soft-delete, recoverable from BC3 UI for 30 days. |
+| "add [person] to a project" / "invite someone to the project" / "remove someone from the project" | `update_project_access` (project_id + numeric grant / revoke / create payload). **Required prerequisite for assigning someone to a todo / card / step in that project.** |
 | "create a todo in [list]" | `create_todo` (project_id, todolist_id, content, +optional description/assignee_ids/due_on/starts_on/notify) |
 | "rename / re-due / re-assign / re-describe a todo" | `update_todo` (only the fields being changed; rest are preserved — see Write semantics) |
 | "mark this todo done" | `complete_todo` |
@@ -195,6 +199,29 @@ This is a two-pass hybrid. `get_assignments_for_person` is the primary tool, but
 
 **Note on `get_todos` and parent lists:** `get_todos` called on a **parent todolist** returns empty when all its items live in subgroups. Only call `get_todos` on subgroup IDs (i.e. IDs that appeared as `parent.id` in assignment results), not on the top-level list ID.
 
+### "Spin up a new project end-to-end"
+
+The full create-then-populate flow:
+
+1. `create_project` with `{ name, description? }`. Returns the project including its server-assigned `id`. Save it.
+2. `update_project_access` with `{ project_id, grant: [<numeric person ids>] }` to add team members. **You must do this before assigning them to anything** — BC3 won't accept assignments to non-members, and won't return a useful error when you try.
+3. `get_project` on the new id to discover the dock — `todoset` for to-do lists, `kanban_board` for the card table (note: `kanban_board` defaults to `enabled: false` on a fresh project; enabling it via API isn't currently exposed by this MCP — use the BC3 UI to enable, or stick with todolists).
+4. `create_todolist` with the project id + the todoset id from step 3.
+5. `create_todo` with the new todolist id, optionally including `assignee_ids` to assign at create time.
+
+If the user says "set up a new project for X with these tasks" — this is the workflow. Don't loop tightly through `create_*` calls; BC3 rate-limits writes.
+
+### "Add [person] to project X"
+
+1. If you don't have their numeric id, `get_people` (account-wide) or `get_project_people` (existing members of *another* project)
+2. `update_project_access` with `{ project_id, grant: [<numeric id>] }`
+3. To remove instead: same call with `revoke` instead of `grant`
+4. To invite a brand-new person: pass `create: [{ name, email_address, title?, company_name? }]` — BC3 creates the account and grants project access in one call
+
+### "Trash this project"
+
+`trash_project` with `{ project_id }`. Soft-delete only — recoverable from the BC3 UI for 30 days. There is no MCP tool for permanent deletion. Confirm with the user before calling — affects every member of the project.
+
 ### "Create a todo in [project] / [list]"
 
 1. If you don't have the todolist id, `get_todolists` (or `get_project` first if you only have the project URL) to find it
@@ -238,7 +265,11 @@ Items in trash are **recoverable from the BC3 UI**. This is soft-delete, not des
 | **Cross-user lookups are slow** | `get_assignments_for_person` takes 5–15s | Expected — BC3 has no server-side assignee filter, so the tool walks `/projects/recordings.json?type=Todo` (paginated) and filters client-side. Don't run it in a tight loop; ask once with the right scope. |
 | **`due_on` is null** | A todo has no due date and gets dropped from scope filters | Scope filters only match items with a date. If the user asks "all of Jill's open tasks", omit `scope` entirely. |
 | **Card steps look like todos** | A "task" in the response has a `parent` that's a card, not a todolist | Some items are kanban card steps surfaced as assignments. They share completion endpoints with todos. Render them with the parent card title for context. |
-| **Card assignment doesn't stick** | `update_card` (or `create_card_step`) returns success but the people don't appear in the BC3 UI | Two possible causes: (1) you sent `assignee_ids` as strings — BC3 silently drops them, must be numbers; (2) the person isn't a member of the project yet — BC3 won't surface a 422 here, the IDs just don't take. Verify both: `get_people` returns numeric IDs, and the assignee shows up in `get_project_people` for the target project before assigning. |
+| **Card assignment doesn't stick** | `update_card` (or `create_card_step`) returns success but the people don't appear in the BC3 UI | Two possible causes: (1) you sent `assignee_ids` as strings — BC3 silently drops them, must be numbers; (2) the person isn't a member of the project yet — BC3 won't surface a 422 here, the IDs just don't take. Fix #1 by sending integers from `get_people`. Fix #2 by calling `update_project_access` with `{ grant: [<numeric id>] }` before assigning. Always verify with `get_project_people` after. |
+| **`create_project` returns 507** | Free-plan account hits "The project limit for this account has been reached" | This is BC3's `Insufficient Storage` response — paid plans have unlimited projects. Surface the BC3 message verbatim; do not retry. |
+| **`update_project` requires `name` even if you're only changing description** | The merge tool handles this for you; raw API calls without `name` will 422 | The MCP tool fetches the current name and supplies it transparently when your patch omits it. Don't worry about it unless you're going around the MCP. |
+| **Person can't be assigned even though `update_project_access` succeeded** | Granted access, but assignments still don't stick | BC3 sometimes takes a beat to propagate access. Wait a second + retry, or call `get_project_people` to confirm the new member appears before assigning. |
+| **`trash_project` is irreversible after 30 days** | User trashed a project, then changed their mind a month later | Trash is recoverable from the BC3 UI for 30 days, then hard-deleted. Warn the user before calling, especially in any "clean up old projects" workflow — there's no permanent-delete tool, but there's also no MCP-side undo after the 30-day window. |
 | **`create_card` rejects `assignee_ids`** | You pass `assignee_ids` to `create_card`; the schema may accept it but BC3 ignores it (the field isn't in the create endpoint) | BC3 quirk — the create endpoint genuinely doesn't take assignees. Two-step it: `create_card` → `update_card` with the IDs. (Card *steps* are the exception — `create_card_step` does accept assignees at create.) |
 | **"L2" is ambiguous** | User says "L2 tasks", you guess wrong project | Ask for the URL or call `get_projects` and confirm. The numeric id is in the URL: `https://3.basecamp.com/4418220/projects/45799317` → `45799317`. |
 | **`scope=overdue` includes completed items** | All-project scan returns many items, but filtering by `completed == false` in your script yields 0 when there are clearly open tasks | The scope filter is date-only — it does NOT exclude completed todos. Always filter `completed == false` explicitly after receiving results. |
