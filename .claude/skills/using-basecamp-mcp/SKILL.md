@@ -31,7 +31,7 @@ When the user asks a Basecamp question, your job is to pick the cheapest tool th
 | "show me a single todo list" | `get_todolist` (project_id + todolist_id) |
 | "show me todos in [list]" | `get_todos` |
 | "show me a single todo" | `get_todo` (project_id + todo_id) |
-| Card-table work (kanban) | `get_card_table` → `get_columns` → `get_cards` → `get_card` |
+| Card-table work (kanban) | `get_card_table` → `get_columns` → `get_cards` → `get_card` (and `get_card_steps` to list a card's sub-tasks) |
 | "show me the project's message board / list messages" | `get_message_board` → `get_messages` → `get_message` |
 | "show me the project's schedule / list events" | `get_schedule` → `get_schedule_entries` → `get_schedule_entry` |
 | "show me a single comment" | `get_comment` |
@@ -319,5 +319,6 @@ For successful writes, confirm what changed (and the resulting id, if any) — t
 - Don't pass `null` to `update_*` expecting field-clear behavior — `null` means "leave alone", same as omission. Use `''` to clear, where BC3 accepts it.
 - Don't assume `set_*_status({status: 'trashed'})` deletes — it moves to trash, recoverable from the BC3 UI.
 - Don't compose multi-step writes (create + update + status) without checking each call's `status` field — a validation failure mid-sequence leaves your state half-applied.
-- Don't auto-perform destructive writes (`set_*_status`, `trash_document`, `delete_webhook`) without confirming the user actually meant *these* items. Echo a summary first: "About to trash 5 todos in L2 → Old Backlog — confirm?"
-- Don't loop `create_*` calls in a tight burst — BC3 rate-limits writes. If you have N items to create, do them serially with small pauses.
+- Don't auto-perform destructive writes (`set_*_status`, `trash_document`, `delete_webhook`, `trash_project`, `update_project_access` with a `revoke` payload) without confirming the user actually meant *these* items. Echo a summary first: "About to trash 5 todos in L2 → Old Backlog — confirm?" `trash_project` is the highest-blast-radius single action — it affects every member.
+- Don't loop `create_*` calls in a tight burst — BC3 rate-limits writes. If you have N items to create, do them serially with small pauses. Same for `create_project` — back-to-back project creates on a free plan will hit the 507 limit fast.
+- Don't try to assign someone to a card / todo / step before they're a project member. Call `update_project_access` with `{ grant: [<numeric id>] }` first, then `get_project_people` to verify, then assign. BC3 silently no-ops assignments to non-members.
