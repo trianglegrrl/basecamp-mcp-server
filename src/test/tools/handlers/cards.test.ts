@@ -13,6 +13,8 @@ function makeMockClient(overrides: Partial<BasecampClient> = {}): BasecampClient
     getCardSteps: vi.fn(),
     createCardStep: vi.fn(),
     completeCardStep: vi.fn(),
+    getCardStep: vi.fn(),
+    updateCardStep: vi.fn(),
     ...overrides,
   } as unknown as BasecampClient;
 }
@@ -141,5 +143,37 @@ describe('cards handlers', () => {
     expect(client.completeCardStep).toHaveBeenCalledWith('100', 'a');
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.message).toMatch(/complete/);
+  });
+
+  it('get_card_step: GETs the step by id', async () => {
+    const client = makeMockClient();
+    (client.getCardStep as any).mockResolvedValue({ id: 'a', title: 'Step', completed: false });
+    const result = await handlers.get_card_step({ project_id: '100', step_id: 'a' }, client);
+    expect(client.getCardStep).toHaveBeenCalledWith('100', 'a');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.step.id).toBe('a');
+  });
+
+  it('update_card_step: forwards optional fields with numeric assignee_ids', async () => {
+    const client = makeMockClient();
+    (client.updateCardStep as any).mockResolvedValue({ id: 'a', title: 'updated' });
+    await handlers.update_card_step(
+      {
+        project_id: '100',
+        step_id: 'a',
+        title: 'updated',
+        due_on: '2026-10-01',
+        assignee_ids: [1049715913],
+      },
+      client,
+    );
+    expect(client.updateCardStep).toHaveBeenCalledWith('100', 'a', 'updated', '2026-10-01', [1049715913]);
+  });
+
+  it('update_card_step: only required fields → forwards undefined for optional ones', async () => {
+    const client = makeMockClient();
+    (client.updateCardStep as any).mockResolvedValue({ id: 'a' });
+    await handlers.update_card_step({ project_id: '100', step_id: 'a' }, client);
+    expect(client.updateCardStep).toHaveBeenCalledWith('100', 'a', undefined, undefined, undefined);
   });
 });

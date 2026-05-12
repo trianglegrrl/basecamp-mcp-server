@@ -40,6 +40,16 @@ const CreateCardStepArgs = z.object({
 
 const CompleteCardStepArgs = z.object({ project_id: z.string(), step_id: z.string() });
 
+const ProjectStepArgs = z.object({ project_id: z.string(), step_id: z.string() });
+
+const UpdateCardStepArgs = z.object({
+  project_id: z.string(),
+  step_id: z.string(),
+  title: z.string().optional(),
+  due_on: z.string().optional(),
+  assignee_ids: z.array(z.union([z.string(), z.number()])).optional(),
+});
+
 async function getCards(rawArgs: Record<string, unknown>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
   const args = ProjectColumnArgs.parse(rawArgs);
   const cards = await c.getCards(args.project_id, args.column_id);
@@ -114,6 +124,24 @@ async function completeCardStep(rawArgs: Record<string, unknown>, c: BasecampCli
   return successResult({ message: 'Step marked as complete' });
 }
 
+async function getCardStep(rawArgs: Record<string, unknown>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const args = ProjectStepArgs.parse(rawArgs);
+  const step = await c.getCardStep(args.project_id, args.step_id);
+  return successResult({ step });
+}
+
+async function updateCardStep(rawArgs: Record<string, unknown>, c: BasecampClient): Promise<MCPToolResultEnvelope> {
+  const args = UpdateCardStepArgs.parse(rawArgs);
+  const step = await c.updateCardStep(
+    args.project_id,
+    args.step_id,
+    args.title,
+    args.due_on,
+    args.assignee_ids,
+  );
+  return successResult({ step, message: 'Step updated' });
+}
+
 export const handlers = {
   get_cards: getCards,
   create_card: createCard,
@@ -124,4 +152,6 @@ export const handlers = {
   get_card_steps: getCardSteps,
   create_card_step: createCardStep,
   complete_card_step: completeCardStep,
+  get_card_step: getCardStep,
+  update_card_step: updateCardStep,
 } as const;

@@ -312,6 +312,33 @@ export const tools: Tool[] = [
       required: ['project_id', 'step_id'],
     },
   },
+  {
+    name: 'get_card_step',
+    description: 'Get a single card step (sub-task) by ID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        step_id: { type: 'string', description: 'The step ID' },
+      },
+      required: ['project_id', 'step_id'],
+    },
+  },
+  {
+    name: 'update_card_step',
+    description: 'Update a card step (sub-task). Use this to assign people to a step — the create_card_step tool also accepts assignee_ids, but this is the route for changing them later.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        step_id: { type: 'string', description: 'The step ID' },
+        title: { type: 'string', description: 'New step title' },
+        due_on: { type: 'string', description: 'New due date (ISO 8601 format)' },
+        assignee_ids: { type: 'array', items: { type: ['string', 'number'] }, description: 'Array of person IDs to assign to the step. BC3 expects numeric person IDs (e.g., from get_people / get_project_people). Sending strings causes BC3 to silently drop them — the assignment never sticks.' },
+      },
+      required: ['project_id', 'step_id'],
+    },
+  },
 
   // Communication tools
   {
